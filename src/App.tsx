@@ -66,6 +66,8 @@ import { cn } from './lib/utils';
 import { format } from 'date-fns';
 import { motion, AnimatePresence } from 'motion/react';
 import { Logo } from './components/Logo';
+import DocViewer, { DocViewerRenderers } from "@cyntler/react-doc-viewer";
+import "@cyntler/react-doc-viewer/dist/index.css";
 
 const LoadingText = () => {
   const [text, setText] = useState('Initializing Systems');
@@ -3460,33 +3462,32 @@ export default function App() {
               </div>
 
               {/* Modal Content (Preview Area) */}
-              <div className="flex-1 overflow-y-auto p-8 bg-slate-50/50 dark:bg-slate-950/50">
-                <div className="max-w-2xl mx-auto space-y-8">
-                  {/* Mock Document Content */}
-                  <div className="glass-panel p-10 rounded-[2.5rem] space-y-8 min-h-[400px] flex flex-col">
-                    <div className="space-y-4">
-                      <div className="h-8 bg-slate-100 dark:bg-slate-800 rounded-lg w-3/4 animate-pulse"></div>
-                      <div className="h-4 bg-slate-100 dark:bg-slate-800 rounded-lg w-full animate-pulse"></div>
-                      <div className="h-4 bg-slate-100 dark:bg-slate-800 rounded-lg w-5/6 animate-pulse"></div>
-                    </div>
+              <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-slate-50/50 dark:bg-slate-950/50">
+                <div className="max-w-4xl mx-auto space-y-8">
+                  {/* Real Document Preview */}
+                  <div className="glass-panel rounded-[2.5rem] overflow-hidden border border-slate-200 dark:border-slate-800 h-[500px] relative group">
+                    {previewDoc.type === 'pdf' ? (
+                      <iframe 
+                        src={`${previewDoc.url}#toolbar=0&navpanes=0`}
+                        className="w-full h-full border-none"
+                        title="Document Preview"
+                      />
+                    ) : (
+                      <div className="w-full h-full flex flex-col items-center justify-center p-12 text-center space-y-6">
+                        <div className="w-24 h-24 bg-brand-50 dark:bg-brand-900/20 text-brand-600 dark:text-brand-400 rounded-[2rem] flex items-center justify-center shadow-inner">
+                          <FileText size={48} />
+                        </div>
+                        <div className="space-y-2">
+                          <h4 className="text-xl font-display font-bold text-dark-surface dark:text-white">DOCX Preview</h4>
+                          <p className="text-sm text-slate-500 max-w-xs">
+                            Rich document format detected. Click "Read Now" for the full interactive experience.
+                          </p>
+                        </div>
+                      </div>
+                    )}
                     
-                    <div className="flex-1 flex flex-col items-center justify-center text-center space-y-4 py-12">
-                      <div className="w-20 h-20 bg-brand-50 dark:bg-brand-900/20 text-brand-600 dark:text-brand-400 rounded-full flex items-center justify-center">
-                        <BookOpen size={40} />
-                      </div>
-                      <div className="space-y-2">
-                        <h4 className="text-lg font-bold text-dark-surface dark:text-white">Document Preview</h4>
-                        <p className="text-sm text-slate-500 max-w-xs mx-auto">
-                          This is a secure preview of the document. Full access is available via the download button below.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="space-y-3">
-                      <div className="h-4 bg-slate-100 rounded-lg w-full"></div>
-                      <div className="h-4 bg-slate-100 rounded-lg w-full"></div>
-                      <div className="h-4 bg-slate-100 rounded-lg w-2/3"></div>
-                    </div>
+                    {/* Overlay to prevent interaction in preview */}
+                    <div className="absolute inset-0 bg-transparent z-10" />
                   </div>
 
                   {/* Document Info */}
@@ -3871,98 +3872,56 @@ export default function App() {
               isFullscreen ? "p-0" : "p-4 sm:p-12"
             )}>
               <div 
-                style={{ transform: `scale(${readerZoom / 100})`, transformOrigin: 'top center' }}
                 className={cn(
-                  "w-full shadow-2xl transition-all duration-500 relative overflow-hidden",
+                  "w-full shadow-2xl transition-all duration-500 relative overflow-hidden flex flex-col",
                   readerTheme === 'light' ? "bg-white" : readerTheme === 'sepia' ? "bg-[#f4ecd8]" : "bg-[#1a1a1a]",
-                  isFullscreen ? "max-w-none rounded-0 p-6 sm:p-32" : "max-w-4xl rounded-[3rem] p-6 sm:p-20",
-                  "min-h-[150vh] space-y-8 sm:space-y-12"
+                  isFullscreen ? "max-w-none rounded-0" : "max-w-5xl rounded-[2rem]",
+                  "min-h-[80vh]"
                 )}
               >
-                {/* Watermark */}
-                <div className={cn(
-                  "absolute inset-0 flex items-center justify-center pointer-events-none opacity-[0.03] select-none rotate-[-30deg]",
-                  readerTheme === 'dark' ? "text-white" : "text-dark-surface"
-                )}>
-                  <span className="text-9xl font-display font-black uppercase tracking-[2rem]">HarMoTech</span>
-                </div>
-
-                {/* Document Content Simulation */}
-                <div className="space-y-10 relative z-10">
-                  <div className="space-y-4">
-                    <div className={cn("h-12 rounded-2xl w-3/4", readerTheme === 'dark' ? "bg-white/5" : "bg-slate-50")}></div>
-                    <div className={cn("h-6 rounded-xl w-1/2", readerTheme === 'dark' ? "bg-white/5" : "bg-slate-50")}></div>
-                  </div>
-
-                  <div className="space-y-6">
-                    <p 
-                      style={{ fontSize: `${readerFontSize}px` }}
-                      className={cn(
-                        "leading-relaxed font-serif transition-all duration-300",
-                        readerTheme === 'dark' ? "text-slate-300" : "text-slate-700"
-                      )}
-                    >
-                      {readerSearchQuery ? (
-                        <span>
-                          Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. 
-                          <span className="bg-yellow-400/30 text-yellow-900 px-1 rounded"> {readerSearchQuery} </span>
-                          Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat.
-                        </span>
-                      ) : (
-                        "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea commodo consequat."
-                      )}
-                    </p>
-                    <p 
-                      style={{ fontSize: `${readerFontSize}px` }}
-                      className={cn(
-                        "leading-relaxed font-serif transition-all duration-300",
-                        readerTheme === 'dark' ? "text-slate-300" : "text-slate-700"
-                      )}
-                    >
-                      Duis aute irure dolor in reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla pariatur. Excepteur sint occaecat cupidatat non proident, sunt in culpa qui officia deserunt mollit anim id est laborum.
-                    </p>
-                    
-                    <div className={cn(
-                      "aspect-video rounded-[2rem] flex items-center justify-center border-2 border-dashed transition-colors",
-                      readerTheme === 'dark' ? "bg-white/5 border-white/10" : "bg-slate-50 border-slate-100"
-                    )}>
-                      <div className="text-center space-y-2">
-                        <BookOpen size={48} className={cn("mx-auto transition-colors", readerTheme === 'dark' ? "text-white/10" : "text-slate-200")} />
-                        <p className="text-slate-300 font-bold uppercase tracking-widest text-xs">Figure 1.1: Conceptual Framework</p>
-                      </div>
+                {readingDoc && (
+                  readingDoc.type === 'pdf' ? (
+                    <div className="w-full h-full bg-white relative">
+                      <iframe 
+                        src={`${readingDoc.url}#view=FitH`}
+                        className="w-full h-full border-none"
+                        title={readingDoc.title}
+                      />
                     </div>
-
-                    <p 
-                      style={{ fontSize: `${readerFontSize}px` }}
-                      className={cn(
-                        "leading-relaxed font-serif transition-all duration-300",
-                        readerTheme === 'dark' ? "text-slate-300" : "text-slate-700"
-                      )}
-                    >
-                      Sed ut perspiciatis unde omnis iste natus error sit voluptatem accusantium doloremque laudantium, totam rem aperiam, eaque ipsa quae ab illo inventore veritatis et quasi architecto beatae vitae dicta sunt explicabo.
-                    </p>
-                    
-                    <div className={cn(
-                      "p-10 rounded-[2rem] border transition-all",
-                      readerTheme === 'dark' ? "bg-brand-900/20 border-brand-500/20" : "bg-brand-50 border-brand-100"
-                    )}>
-                      <h4 className={cn("text-lg font-bold", readerTheme === 'dark' ? "text-brand-400" : "text-brand-900")}>Key Takeaway</h4>
-                      <p className={cn("leading-relaxed", readerTheme === 'dark' ? "text-brand-200" : "text-brand-800")}>
-                        The integration of advanced document readers significantly enhances the user's ability to digest complex information within a native application environment.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Page Footer */}
-                <div className={cn(
-                  "pt-20 border-t flex items-center justify-between font-bold text-xs uppercase tracking-widest transition-colors",
-                  readerTheme === 'dark' ? "border-white/5 text-white/10" : "border-slate-100 text-slate-300"
-                )}>
-                  <span>HarMoTech Study App</span>
-                  <span>Page 1 of 42</span>
-                  <span>{new Date().getFullYear()}</span>
-                </div>
+                  ) : (
+                    <DocViewer
+                      documents={[{ uri: readingDoc.url, fileName: readingDoc.title }]}
+                      pluginRenderers={DocViewerRenderers}
+                      theme={{
+                        primary: "#6366f1",
+                        secondary: "#ffffff",
+                        tertiary: readerTheme === 'dark' ? "#1a1a1a" : "#f8fafc",
+                        textPrimary: readerTheme === 'dark' ? "#ffffff" : "#0f172a",
+                        textSecondary: "#64748b",
+                        textTertiary: "#94a3b8",
+                        disableThemeScrollbar: false,
+                      }}
+                      config={{
+                        header: {
+                          disableHeader: true,
+                          disableFileName: true,
+                          retainURLParams: false,
+                        },
+                        csvDelimiter: ",",
+                        pdfZoom: {
+                          defaultZoom: 1,
+                          zoomJump: 0.2,
+                        },
+                        pdfVerticalScrollByDefault: true,
+                      }}
+                      style={{
+                        height: "100%",
+                        width: "100%",
+                        borderRadius: isFullscreen ? "0" : "2rem",
+                      }}
+                    />
+                  )
+                )}
               </div>
             </main>
 
