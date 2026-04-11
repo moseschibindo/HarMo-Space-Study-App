@@ -66,8 +66,6 @@ import { cn } from './lib/utils';
 import { format } from 'date-fns';
 import { motion, AnimatePresence } from 'motion/react';
 import { Logo } from './components/Logo';
-import DocViewer, { DocViewerRenderers } from "@cyntler/react-doc-viewer";
-import "@cyntler/react-doc-viewer/dist/index.css";
 
 const LoadingText = () => {
   const [text, setText] = useState('Initializing Systems');
@@ -152,6 +150,16 @@ export default function App() {
   const [previewDoc, setPreviewDoc] = useState<StudyDocument | null>(null);
   const [readingDoc, setReadingDoc] = useState<StudyDocument | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isPreviewLoading, setIsPreviewLoading] = useState(true);
+  const [isReaderLoading, setIsReaderLoading] = useState(true);
+
+  useEffect(() => {
+    if (previewDoc) setIsPreviewLoading(true);
+  }, [previewDoc]);
+
+  useEffect(() => {
+    if (readingDoc) setIsReaderLoading(true);
+  }, [readingDoc]);
   const [readerZoom, setReaderZoom] = useState(100);
   const [readerFontSize, setReaderFontSize] = useState(20);
   const [readerTheme, setReaderTheme] = useState<'light' | 'sepia' | 'dark'>('light');
@@ -267,6 +275,39 @@ export default function App() {
         },
         () => {
           fetchDocuments();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'businesses'
+        },
+        () => {
+          fetchBusinessListings();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'lost_found'
+        },
+        () => {
+          fetchLostFound();
+        }
+      )
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'notifications'
+        },
+        () => {
+          fetchNotifications();
         }
       )
       .subscribe();
@@ -404,18 +445,45 @@ export default function App() {
     e.preventDefault();
     setAuthError(null);
     setAuthSuccess(null);
+
+    // Basic Validation
+    if (!authFormData.email.includes('@')) {
+      setAuthError('Please enter a valid email address');
+      return;
+    }
+    if (authFormData.password.length < 6) {
+      setAuthError('Password must be at least 6 characters long');
+      return;
+    }
+    if (authView === 'signup' && !authFormData.displayName.trim()) {
+      setAuthError('Please enter your full name');
+      return;
+    }
+
     setAuthSubmitting(true);
     try {
       if (authView === 'login') {
         await signIn(authFormData.email, authFormData.password);
       } else {
         await signUp(authFormData.email, authFormData.password, authFormData.displayName, authFormData.phoneNumber);
-        setAuthSuccess('Account created successfully! Please sign in with your credentials.');
+        setAuthSuccess('Account created successfully! You can now sign in.');
         setAuthView('login');
         setAuthFormData({ ...authFormData, password: '' });
       }
     } catch (err: any) {
-      setAuthError(err.message || 'An error occurred during authentication');
+      console.error('Auth Error:', err);
+      let message = err.message || 'An error occurred during authentication';
+      
+      // User-friendly error mapping
+      if (message.includes('Invalid login credentials')) {
+        message = 'Invalid email or password. Please try again.';
+      } else if (message.includes('User already registered')) {
+        message = 'An account with this email already exists.';
+      } else if (message.includes('Database error saving new user')) {
+        message = 'There was a temporary issue creating your profile. Please try signing in now; your profile will be created automatically.';
+      }
+      
+      setAuthError(message);
     } finally {
       setAuthSubmitting(false);
     }
@@ -658,24 +726,13 @@ export default function App() {
         date: new Date().toISOString().split('T')[0],
       });
       fetchLostFound();
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error saving lost/found item:', err);
-      // Fallback to local state if table doesn't exist yet
-      if (editingLostFound) {
-        setLostFoundItems(lostFoundItems.map(item => item.id === editingLostFound.id ? { ...item, ...lostFoundFormData } : item));
+      if (err.message === 'Failed to fetch') {
+        alert('Network Error: Could not connect to Supabase. Please check your VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in Settings > Secrets.');
       } else {
-        const mockItem: LostFoundItem = {
-          id: Math.random().toString(36).substr(2, 9),
-          ...lostFoundFormData,
-          status: isAdmin ? 'approved' : 'pending',
-          authorId: user.id,
-          authorName: profile?.displayName || 'User',
-          authorPhone: profile?.phoneNumber,
-          createdAt: new Date().toISOString()
-        };
-        setLostFoundItems([mockItem, ...lostFoundItems]);
+        alert(`Failed to save lost/found item: ${err.message || 'Unknown error'}`);
       }
-      setIsLostFoundModalOpen(false);
     } finally {
       setIsUploading(false);
     }
@@ -799,9 +856,13 @@ export default function App() {
         contactPhone: '',
       });
       fetchBusinessListings();
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error saving business listing:', err);
-      alert('Failed to save business listing. Check console for details.');
+      if (err.message === 'Failed to fetch') {
+        alert('Network Error: Could not connect to Supabase. Please check your VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in Settings > Secrets.');
+      } else {
+        alert(`Failed to save business listing: ${err.message || 'Unknown error'}`);
+      }
     } finally {
       setIsUploadingBusiness(false);
     }
@@ -1356,7 +1417,7 @@ export default function App() {
                 </button>
               </form>
 
-              <div className="text-center">
+              <div className="text-center space-y-4">
                 <button 
                   onClick={() => {
                     setAuthView(authView === 'login' ? 'signup' : 'login');
@@ -1366,6 +1427,21 @@ export default function App() {
                 >
                   {authView === 'login' ? "Don't have an account? Sign Up" : "Already have an account? Sign In"}
                 </button>
+
+                <div className="pt-4 border-t border-slate-100 dark:border-slate-800">
+                  <button 
+                    onClick={() => {
+                      if (confirm('This will clear your local session and reload the app. Use this if you are experiencing login errors. Continue?')) {
+                        localStorage.clear();
+                        sessionStorage.clear();
+                        window.location.reload();
+                      }
+                    }}
+                    className="text-[10px] font-bold text-slate-400 hover:text-red-500 uppercase tracking-widest transition-colors"
+                  >
+                    Trouble signing in? Reset Session
+                  </button>
+                </div>
               </div>
             </div>
           </motion.div>
@@ -2962,7 +3038,7 @@ export default function App() {
                     <div>
                       <h4 className="font-bold text-lg text-dark-surface dark:text-white">{item.title}</h4>
                       <p className="text-sm text-slate-500">{item.location} • {item.date}</p>
-                      <div className="flex items-center gap-2 mt-1">
+                      <div className="flex items-center gap-3 mt-1">
                         <span className={cn(
                           "text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-widest",
                           item.status === 'approved' ? "bg-emerald-100 text-emerald-600" :
@@ -2971,17 +3047,28 @@ export default function App() {
                         )}>
                           {item.status}
                         </span>
+                        <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">By {item.authorName}</span>
                       </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
                     {item.status === 'pending' && (
-                      <button 
-                        onClick={() => handleApproveLostFound(item.id, 'approved')}
-                        className="p-3 bg-emerald-50 text-emerald-600 rounded-xl hover:bg-emerald-100 transition-colors"
-                      >
-                        <CheckCircle size={20} />
-                      </button>
+                      <>
+                        <button 
+                          onClick={() => handleApproveLostFound(item.id, 'approved')}
+                          className="p-3 bg-emerald-50 text-emerald-600 rounded-xl hover:bg-emerald-100 transition-colors"
+                          title="Approve"
+                        >
+                          <CheckCircle size={20} />
+                        </button>
+                        <button 
+                          onClick={() => handleApproveLostFound(item.id, 'rejected')}
+                          className="p-3 bg-red-50 text-red-600 rounded-xl hover:bg-red-100 transition-colors"
+                          title="Reject"
+                        >
+                          <X size={20} />
+                        </button>
+                      </>
                     )}
                     <button 
                       onClick={() => {
@@ -3062,7 +3149,7 @@ export default function App() {
                     <div>
                       <h4 className="font-bold text-lg text-dark-surface dark:text-white">{business.title}</h4>
                       <p className="text-sm text-slate-500">{business.category} • {business.price || 'No price'}</p>
-                      <div className="flex items-center gap-2 mt-1">
+                      <div className="flex items-center gap-3 mt-1">
                         <span className={cn(
                           "text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-widest",
                           business.status === 'approved' ? "bg-emerald-100 text-emerald-600" :
@@ -3071,17 +3158,28 @@ export default function App() {
                         )}>
                           {business.status}
                         </span>
+                        <span className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">By {business.authorName}</span>
                       </div>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
                     {business.status === 'pending' && (
-                      <button 
-                        onClick={() => handleApproveBusiness(business.id, 'approved')}
-                        className="p-3 bg-emerald-50 text-emerald-600 rounded-xl hover:bg-emerald-100 transition-colors"
-                      >
-                        <CheckCircle size={20} />
-                      </button>
+                      <>
+                        <button 
+                          onClick={() => handleApproveBusiness(business.id, 'approved')}
+                          className="p-3 bg-emerald-50 text-emerald-600 rounded-xl hover:bg-emerald-100 transition-colors"
+                          title="Approve"
+                        >
+                          <CheckCircle size={20} />
+                        </button>
+                        <button 
+                          onClick={() => handleApproveBusiness(business.id, 'rejected')}
+                          className="p-3 bg-red-50 text-red-600 rounded-xl hover:bg-red-100 transition-colors"
+                          title="Reject"
+                        >
+                          <X size={20} />
+                        </button>
+                      </>
                     )}
                     <button 
                       onClick={() => {
@@ -3465,26 +3563,22 @@ export default function App() {
               <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-slate-50/50 dark:bg-slate-950/50">
                 <div className="max-w-4xl mx-auto space-y-8">
                   {/* Real Document Preview */}
-                  <div className="glass-panel rounded-[2.5rem] overflow-hidden border border-slate-200 dark:border-slate-800 h-[500px] relative group">
-                    {previewDoc.type === 'pdf' ? (
-                      <iframe 
-                        src={`${previewDoc.url}#toolbar=0&navpanes=0`}
-                        className="w-full h-full border-none"
-                        title="Document Preview"
-                      />
-                    ) : (
-                      <div className="w-full h-full flex flex-col items-center justify-center p-12 text-center space-y-6">
-                        <div className="w-24 h-24 bg-brand-50 dark:bg-brand-900/20 text-brand-600 dark:text-brand-400 rounded-[2rem] flex items-center justify-center shadow-inner">
-                          <FileText size={48} />
-                        </div>
-                        <div className="space-y-2">
-                          <h4 className="text-xl font-display font-bold text-dark-surface dark:text-white">DOCX Preview</h4>
-                          <p className="text-sm text-slate-500 max-w-xs">
-                            Rich document format detected. Click "Read Now" for the full interactive experience.
-                          </p>
-                        </div>
+                  <div className="glass-panel rounded-[2.5rem] overflow-hidden border border-slate-200 dark:border-slate-800 h-[500px] relative group bg-white">
+                    {isPreviewLoading && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-900 z-20">
+                        <div className="w-12 h-12 border-4 border-brand-200 border-t-brand-600 rounded-full animate-spin mb-4" />
+                        <p className="text-sm font-bold text-slate-500 animate-pulse">Generating Preview...</p>
                       </div>
                     )}
+                    <iframe 
+                      src={previewDoc.type === 'pdf' 
+                        ? `${previewDoc.url}#toolbar=0&navpanes=0&view=FitH` 
+                        : `https://docs.google.com/gview?embedded=1&url=${encodeURIComponent(previewDoc.url)}`
+                      }
+                      className="w-full h-full border-none"
+                      title="Document Preview"
+                      onLoad={() => setIsPreviewLoading(false)}
+                    />
                     
                     {/* Overlay to prevent interaction in preview */}
                     <div className="absolute inset-0 bg-transparent z-10" />
@@ -3505,15 +3599,13 @@ export default function App() {
               </div>
 
               {/* Modal Footer */}
-              <div className="px-8 py-6 border-t border-slate-100 flex items-center gap-4 shrink-0">
+              <div className="px-8 py-6 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row items-center gap-4 shrink-0">
                 <button 
                   onClick={() => {
                     setReadingDoc(previewDoc);
                     setPreviewDoc(null);
-                    // Attempt to enter fullscreen on read
-                    document.documentElement.requestFullscreen().catch(() => {});
                   }}
-                  className="flex-1 py-4 bg-brand-50 hover:bg-brand-100 text-brand-600 rounded-2xl font-bold transition-all flex items-center justify-center gap-2"
+                  className="w-full sm:flex-1 py-4 bg-brand-600 hover:bg-brand-700 text-white rounded-2xl font-bold transition-all shadow-xl shadow-brand-200 flex items-center justify-center gap-3"
                 >
                   <BookOpen size={20} />
                   Read Now
@@ -3522,7 +3614,7 @@ export default function App() {
                   href={previewDoc.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex-[2] py-4 bg-brand-600 hover:bg-brand-700 text-white rounded-2xl font-bold transition-all shadow-xl shadow-brand-200 flex items-center justify-center gap-3"
+                  className="w-full sm:flex-1 py-4 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-2xl font-bold transition-all flex items-center justify-center gap-3"
                 >
                   <Download size={20} />
                   Download {previewDoc.type.toUpperCase()}
@@ -3749,11 +3841,12 @@ export default function App() {
                     <button 
                       onClick={() => setReadingDoc(null)}
                       className={cn(
-                        "p-3 rounded-2xl transition-colors shrink-0",
+                        "p-3 rounded-2xl transition-colors shrink-0 flex items-center gap-2",
                         readerTheme === 'dark' ? "hover:bg-white/5 text-white/40 hover:text-white" : "hover:bg-slate-100 text-slate-400 hover:text-dark-surface"
                       )}
                     >
                       <ChevronLeft size={24} />
+                      <span className="hidden sm:inline font-bold text-sm">Go Back</span>
                     </button>
                     <div className="min-w-0">
                       <h3 className={cn(
@@ -3856,9 +3949,10 @@ export default function App() {
 
                     <button 
                       onClick={() => setReadingDoc(null)}
-                      className="ml-2 px-6 py-2.5 bg-dark-surface text-white rounded-xl font-bold text-sm"
+                      className="ml-2 px-6 py-2.5 bg-dark-surface text-white rounded-xl font-bold text-sm flex items-center gap-2"
                     >
-                      Exit
+                      <X size={16} />
+                      Go Back
                     </button>
                   </div>
                 </motion.header>
@@ -3880,47 +3974,27 @@ export default function App() {
                 )}
               >
                 {readingDoc && (
-                  readingDoc.type === 'pdf' ? (
-                    <div className="w-full h-full bg-white relative">
-                      <iframe 
-                        src={`${readingDoc.url}#view=FitH`}
-                        className="w-full h-full border-none"
-                        title={readingDoc.title}
-                      />
-                    </div>
-                  ) : (
-                    <DocViewer
-                      documents={[{ uri: readingDoc.url, fileName: readingDoc.title }]}
-                      pluginRenderers={DocViewerRenderers}
-                      theme={{
-                        primary: "#6366f1",
-                        secondary: "#ffffff",
-                        tertiary: readerTheme === 'dark' ? "#1a1a1a" : "#f8fafc",
-                        textPrimary: readerTheme === 'dark' ? "#ffffff" : "#0f172a",
-                        textSecondary: "#64748b",
-                        textTertiary: "#94a3b8",
-                        disableThemeScrollbar: false,
-                      }}
-                      config={{
-                        header: {
-                          disableHeader: true,
-                          disableFileName: true,
-                          retainURLParams: false,
-                        },
-                        csvDelimiter: ",",
-                        pdfZoom: {
-                          defaultZoom: 1,
-                          zoomJump: 0.2,
-                        },
-                        pdfVerticalScrollByDefault: true,
-                      }}
+                  <div className="w-full h-full bg-white relative overflow-hidden">
+                    {isReaderLoading && (
+                      <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-900 z-20">
+                        <div className="w-16 h-16 border-4 border-brand-200 border-t-brand-600 rounded-full animate-spin mb-4" />
+                        <p className="text-lg font-bold text-slate-600 dark:text-slate-300 animate-pulse">Loading Document...</p>
+                        <p className="text-sm text-slate-400 mt-2">Preparing your reading experience</p>
+                      </div>
+                    )}
+                    <iframe 
+                      src={readingDoc.type === 'pdf' 
+                        ? `${readingDoc.url}#view=FitH` 
+                        : `https://docs.google.com/gview?embedded=1&url=${encodeURIComponent(readingDoc.url)}`
+                      }
+                      className="w-full h-full border-none"
+                      title={readingDoc.title}
+                      onLoad={() => setIsReaderLoading(false)}
                       style={{
-                        height: "100%",
-                        width: "100%",
                         borderRadius: isFullscreen ? "0" : "2rem",
                       }}
                     />
-                  )
+                  </div>
                 )}
               </div>
             </main>

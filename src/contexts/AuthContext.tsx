@@ -23,7 +23,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     // Check active sessions and sets the user
-    supabase.auth.getSession().then(({ data: { session } }) => {
+    supabase.auth.getSession().then(({ data: { session }, error }) => {
+      if (error && error.message.includes('refresh_token_not_found')) {
+        console.warn('Session expired or invalid. Clearing local auth state.');
+        supabase.auth.signOut();
+        setUser(null);
+        setProfile(null);
+        setLoading(false);
+        return;
+      }
+      
       setUser(session?.user ?? null);
       if (session?.user) {
         fetchProfile(session.user.id);
@@ -33,7 +42,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
 
     // Listen for changes on auth state (logged in, signed out, etc.)
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange(async (event, session) => {
+      if (event === 'TOKEN_REFRESHED') {
+        console.log('Token refreshed successfully');
+      }
+      
+      if (event === 'SIGNED_OUT') {
+        setUser(null);
+        setProfile(null);
+        setLoading(false);
+        return;
+      }
+
       setUser(session?.user ?? null);
       if (session?.user) {
         fetchProfile(session.user.id);
@@ -54,7 +74,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         .eq('id', userId)
         .single();
 
-      if (error) throw error;
+      if (error) {
+        // If profile doesn't exist, create it (Fail-safe for trigger issues)
+        if (error.code === 'PGRST116') {
+          const { data: userData } = await supabase.auth.getUser();
+          if (userData?.user) {
+            const newProfile = {
+              id: userId,
+              email: userData.user.email,
+              display_name: userData.user.user_metadata?.display_name || 'User',
+              phone_number: userData.user.user_metadata?.phone_number || '',
+              role: 'student',
+              status: 'active'
+            };
+            const { error: insertError } = await supabase.from('profiles').insert([newProfile]);
+            if (!insertError) {
+              fetchProfile(userId); // Retry fetching now that it's created
+              return;
+            }
+          }
+        }
+        throw error;
+      }
       
       // Map snake_case from DB to camelCase for the app
       const mappedProfile: UserProfile = {
@@ -107,7 +148,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    setLoading(true);
+    try {
+      await supabase.auth.signOut();
+    } catch (error) {
+      console.error('Error signing out:', error);
+    } finally {
+      setLoading(false);
+    }
   };
 
   const updateProfile = async (updates: Partial<UserProfile>) => {
@@ -126,9 +174,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         .from('profiles')
         .update(dbUpdates)
         .eq('id', user.id);
-      if (error) throw error;
+      
+      if (error) {
+        if (error.message.includes('permission denied')) {
+          throw new Error('You do not have permission to update this profile.');
+        }
+        throw error;
+      }
+      
       setProfile(prev => prev ? { ...prev, ...updates } : null);
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating profile:', error);
       throw error;
     }
