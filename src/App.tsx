@@ -49,6 +49,7 @@ import {
   UserPlus,
   Ban,
   Store,
+  TrendingUp,
   ArrowLeft,
   ShoppingBag,
   ShieldAlert,
@@ -117,6 +118,94 @@ const CoolLoader = ({ size = 24, color = "white" }: { size?: number, color?: str
   );
 };
 
+function MarketCard({ business, onClick, compact = false }: { business: BusinessListing, onClick: () => void, compact?: boolean, key?: any }) {
+  return (
+    <motion.div 
+      layout
+      onClick={onClick}
+      className={cn(
+        "glass-panel rounded-[2rem] overflow-hidden flex flex-col group cursor-pointer transition-all hover:shadow-2xl hover:shadow-brand-500/10 h-full",
+        compact ? "border-slate-100 dark:border-slate-800" : "border-transparent"
+      )}
+    >
+      {/* Image Gallery */}
+      <div className={cn(
+        "relative bg-slate-100 dark:bg-slate-800 overflow-hidden",
+        compact ? "aspect-square" : "aspect-[4/3]"
+      )}>
+        {business.imageUrls.length > 0 ? (
+          <img 
+            src={business.imageUrls[0]} 
+            alt={business.title}
+            className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
+            referrerPolicy="no-referrer"
+          />
+        ) : (
+          <div className="w-full h-full flex items-center justify-center text-slate-300 dark:text-slate-700">
+            <Store size={compact ? 32 : 48} />
+          </div>
+        )}
+        
+        {business.price && (
+          <div className="absolute top-3 left-3 px-3 py-1.5 bg-white/90 dark:bg-slate-900/90 backdrop-blur-md rounded-xl shadow-lg">
+            <span className="text-brand-600 dark:text-brand-400 font-bold text-[10px] sm:text-xs">{business.price}</span>
+          </div>
+        )}
+
+        <div className="absolute bottom-3 right-3 px-2 py-1 bg-white/80 dark:bg-slate-900/80 backdrop-blur-md rounded-lg flex items-center gap-1.5 shadow-sm">
+          <Eye size={12} className="text-slate-500" />
+          <span className="text-[10px] font-bold text-slate-600 dark:text-slate-300">
+            {business.viewedBy?.length || 0}
+          </span>
+        </div>
+
+        {!compact && (
+          <div className="absolute top-3 right-3 px-2 py-1 bg-dark-surface/80 backdrop-blur-md rounded-lg text-white text-[8px] font-bold uppercase tracking-widest">
+            {business.category}
+          </div>
+        )}
+      </div>
+
+      <div className={cn(
+        "p-4 space-y-3 flex-1 flex flex-col",
+        compact ? "p-3" : "p-5"
+      )}>
+        <div className="space-y-1">
+          <h3 className={cn(
+            "font-bold text-dark-surface dark:text-white line-clamp-1",
+            compact ? "text-sm" : "text-lg"
+          )}>{business.title}</h3>
+          {!compact && (
+            <p className="text-slate-500 text-xs line-clamp-2 leading-relaxed">{business.description}</p>
+          )}
+        </div>
+
+        <div className="space-y-2 pt-1 flex-1">
+          <div className="flex items-center gap-2 text-slate-400">
+            <MapPin size={compact ? 12 : 14} className="shrink-0" />
+            <span className="text-[10px] font-medium truncate">{business.location}</span>
+          </div>
+          {!compact && (
+            <div className="flex items-center gap-2 text-slate-400">
+              <UserIcon size={14} className="shrink-0" />
+              <span className="text-[10px] font-medium truncate">By {business.authorName}</span>
+            </div>
+          )}
+        </div>
+
+        {!compact && (
+          <div className="pt-3 border-t border-slate-100 dark:border-slate-800">
+            <div className="w-full py-3 bg-brand-50 dark:bg-brand-900/10 text-brand-600 dark:text-brand-400 rounded-xl font-bold text-[10px] flex items-center justify-center gap-2 group-hover:bg-brand-600 group-hover:text-white transition-all">
+              <Phone size={14} />
+              Contact Seller
+            </div>
+          </div>
+        )}
+      </div>
+    </motion.div>
+  );
+}
+
 export default function App() {
   const { user, profile, isAdmin, loading: authLoading, signIn, signUp, signOut, updateProfile } = useAuth();
   const [activeTab, setActiveTab] = useState<'home' | 'marketplace' | 'profile' | 'admin' | 'lostfound' | 'notifications' | 'users' | 'manage-docs' | 'manage-notifications' | 'manage-lostfound' | 'manage-marketplace'>('home');
@@ -148,6 +237,10 @@ export default function App() {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingDoc, setEditingDoc] = useState<StudyDocument | null>(null);
   const [previewDoc, setPreviewDoc] = useState<StudyDocument | null>(null);
+  const [previewBusiness, setPreviewBusiness] = useState<BusinessListing | null>(null);
+  const [recentlyViewedBusinesses, setRecentlyViewedBusinesses] = useState<BusinessListing[]>([]);
+  const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
   const [readingDoc, setReadingDoc] = useState<StudyDocument | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [isPreviewLoading, setIsPreviewLoading] = useState(true);
@@ -635,29 +728,62 @@ export default function App() {
     setEditingNotification(null);
   };
 
-  const handleSuspendUser = (userId: string) => {
-    setUsers(users.map(u => {
-      if (u.uid === userId) {
-        const newStatus = u.status === 'active' ? 'suspended' : 'active';
-        return { ...u, status: newStatus, role: newStatus === 'suspended' ? 'suspended' : 'student' };
-      }
-      return u;
-    }));
-  };
+  const handleSuspendUser = async (userId: string) => {
+    const userToUpdate = users.find(u => u.uid === userId);
+    if (!userToUpdate) return;
 
-  const handleDeleteUser = (userId: string) => {
-    if (window.confirm('Are you sure you want to delete this user account? This action cannot be undone.')) {
-      setUsers(users.filter(u => u.uid !== userId));
+    const newStatus = userToUpdate.status === 'active' ? 'suspended' : 'active';
+    const newRole = newStatus === 'suspended' ? 'suspended' : 'student';
+
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ 
+          status: newStatus,
+          role: newRole
+        })
+        .eq('uid', userId);
+
+      if (error) throw error;
+      setUsers(users.map(u => u.uid === userId ? { ...u, status: newStatus, role: newRole } : u));
+    } catch (err) {
+      console.error('Error suspending user:', err);
     }
   };
 
-  const handlePromoteUser = (userId: string) => {
-    setUsers(users.map(u => {
-      if (u.uid === userId) {
-        return { ...u, role: u.role === 'admin' ? 'student' : 'admin' };
+  const handleDeleteUser = async (userId: string) => {
+    if (window.confirm('Are you sure you want to delete this user account? This action cannot be undone.')) {
+      try {
+        const { error } = await supabase
+          .from('profiles')
+          .delete()
+          .eq('uid', userId);
+
+        if (error) throw error;
+        setUsers(users.filter(u => u.uid !== userId));
+      } catch (err) {
+        console.error('Error deleting user:', err);
       }
-      return u;
-    }));
+    }
+  };
+
+  const handlePromoteUser = async (userId: string) => {
+    const userToUpdate = users.find(u => u.uid === userId);
+    if (!userToUpdate) return;
+
+    const newRole = userToUpdate.role === 'admin' ? 'student' : 'admin';
+
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ role: newRole })
+        .eq('uid', userId);
+
+      if (error) throw error;
+      setUsers(users.map(u => u.uid === userId ? { ...u, role: newRole } : u));
+    } catch (err) {
+      console.error('Error promoting user:', err);
+    }
   };
 
   const handleAddLostFound = async (e: React.FormEvent) => {
@@ -786,6 +912,27 @@ export default function App() {
     }
   };
 
+  const handleViewBusiness = async (business: BusinessListing) => {
+    setCurrentImageIndex(0);
+    setPreviewBusiness(business);
+    setRecentlyViewedBusinesses(prev => {
+      const filtered = prev.filter(item => item.id !== business.id);
+      return [business, ...filtered].slice(0, 10);
+    });
+
+    if (user && (!business.viewedBy || !business.viewedBy.includes(user.id))) {
+      const newViewedBy = [...(business.viewedBy || []), user.id];
+      const { error } = await supabase
+        .from('businesses')
+        .update({ viewed_by: newViewedBy })
+        .eq('id', business.id);
+      
+      if (!error) {
+        setBusinessListings(prev => prev.map(b => b.id === business.id ? { ...b, viewedBy: newViewedBy } : b));
+      }
+    }
+  };
+
   const handleAddBusiness = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
@@ -812,7 +959,7 @@ export default function App() {
           
           return publicUrl;
         }));
-        imageUrls = [...imageUrls, ...newUrls].slice(0, 3);
+        imageUrls = [...imageUrls, ...newUrls].slice(0, 2);
       }
 
       const businessData = {
@@ -839,7 +986,8 @@ export default function App() {
             ...businessData,
             author_id: user.id,
             author_name: profile?.displayName || 'User',
-            created_at: new Date().toISOString()
+            created_at: new Date().toISOString(),
+            viewed_by: []
           }]);
         if (error) throw error;
       }
@@ -1020,7 +1168,8 @@ export default function App() {
         status: b.status,
         authorId: b.author_id,
         authorName: b.author_name,
-        createdAt: b.created_at
+        createdAt: b.created_at,
+        viewedBy: b.viewed_by || []
       }));
       
       setBusinessListings(mappedListings);
@@ -1822,82 +1971,77 @@ export default function App() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 pb-8">
-              {filteredMarketItems.length === 0 ? (
-                <div className="col-span-full text-center py-20 glass-panel rounded-[3rem] space-y-6">
-                  <div className="w-24 h-24 bg-slate-50 text-slate-300 rounded-[2rem] flex items-center justify-center mx-auto">
-                    <Store size={48} />
+            {/* Marketplace Sections */}
+            <div className="space-y-10 pb-8">
+              {/* Recently Viewed */}
+              {recentlyViewedBusinesses.length > 0 && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between px-1">
+                    <h3 className="text-xl font-bold text-dark-surface dark:text-white">Recently Viewed</h3>
+                    <button 
+                      onClick={() => setRecentlyViewedBusinesses([])}
+                      className="text-xs font-bold text-slate-400 hover:text-brand-600 transition-colors uppercase tracking-widest"
+                    >
+                      Clear
+                    </button>
                   </div>
-                  <div className="space-y-2">
-                    <h3 className="text-xl font-bold text-dark-surface dark:text-white">No listings found</h3>
-                    <p className="text-slate-400 max-w-[200px] mx-auto text-sm">
-                      {marketSearchQuery ? "Try adjusting your search terms." : "Be the first to advertise your business here!"}
-                    </p>
+                  <div className="flex gap-4 overflow-x-auto pb-4 scrollbar-hide -mx-4 px-4 snap-x">
+                    {recentlyViewedBusinesses.map((business) => (
+                      <div key={`recent-${business.id}`} className="min-w-[240px] max-w-[240px] snap-start">
+                        <MarketCard business={business} onClick={() => handleViewBusiness(business)} compact />
+                      </div>
+                    ))}
                   </div>
                 </div>
-              ) : (
-                filteredMarketItems.map((business) => (
-                  <motion.div 
-                    layout
-                    key={business.id}
-                    className="glass-panel rounded-[2.5rem] overflow-hidden flex flex-col group"
-                  >
-                    {/* Image Gallery */}
-                    <div className="relative aspect-[4/3] bg-slate-100 overflow-hidden">
-                      {business.imageUrls.length > 0 ? (
-                        <img 
-                          src={business.imageUrls[0]} 
-                          alt={business.title}
-                          className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
-                          referrerPolicy="no-referrer"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-slate-300">
-                          <Store size={48} />
-                        </div>
-                      )}
-                      
-                      {business.price && (
-                        <div className="absolute top-4 left-4 px-4 py-2 bg-white/90 backdrop-blur-md rounded-xl shadow-lg">
-                          <span className="text-brand-600 font-bold text-sm">{business.price}</span>
-                        </div>
-                      )}
-
-                      <div className="absolute top-4 right-4 px-3 py-1.5 bg-dark-surface/80 backdrop-blur-md rounded-lg text-white text-[10px] font-bold uppercase tracking-widest">
-                        {business.category}
-                      </div>
-                    </div>
-
-                    <div className="p-6 space-y-4 flex-1 flex flex-col">
-                      <div className="space-y-1">
-                        <h3 className="text-xl font-bold text-dark-surface dark:text-white line-clamp-1">{business.title}</h3>
-                        <p className="text-slate-500 text-sm line-clamp-2">{business.description}</p>
-                      </div>
-
-                      <div className="space-y-3 pt-2 flex-1">
-                        <div className="flex items-center gap-2 text-slate-500">
-                          <MapPin size={16} className="shrink-0" />
-                          <span className="text-xs font-medium truncate">{business.location}</span>
-                        </div>
-                        <div className="flex items-center gap-2 text-slate-500">
-                          <UserIcon size={16} className="shrink-0" />
-                          <span className="text-xs font-medium truncate">By {business.authorName}</span>
-                        </div>
-                      </div>
-
-                      <div className="pt-4 border-t border-slate-100">
-                        <a 
-                          href={`tel:${business.contactPhone}`}
-                          className="w-full py-4 bg-brand-50 text-brand-600 rounded-2xl font-bold text-sm flex items-center justify-center gap-2 hover:bg-brand-100 transition-colors"
-                        >
-                          <Phone size={18} />
-                          Contact Seller
-                        </a>
-                      </div>
-                    </div>
-                  </motion.div>
-                ))
               )}
+
+              {/* Trending Products */}
+              {filteredMarketItems.length > 0 && (
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between px-1">
+                    <h3 className="text-xl font-bold text-dark-surface dark:text-white">Trending Markets</h3>
+                    <div className="flex items-center gap-1 text-brand-600">
+                      <TrendingUp size={16} />
+                      <span className="text-[10px] font-bold uppercase tracking-widest">Hot Now</span>
+                    </div>
+                  </div>
+                  <div className="flex gap-4 overflow-x-auto pb-4 scrollbar-hide -mx-4 px-4 snap-x">
+                    {filteredMarketItems.slice(0, 6).map((business) => (
+                      <div key={`trending-${business.id}`} className="min-w-[240px] max-w-[240px] snap-start">
+                        <MarketCard business={business} onClick={() => handleViewBusiness(business)} compact />
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* All Products Grid */}
+              <div className="space-y-6">
+                <h3 className="text-xl font-bold text-dark-surface dark:text-white px-1">All Products</h3>
+                <div className="grid grid-cols-2 gap-3 sm:gap-6">
+                  {filteredMarketItems.length === 0 ? (
+                    <div className="col-span-full text-center py-20 glass-panel rounded-[3rem] space-y-6">
+                      <div className="w-24 h-24 bg-slate-50 text-slate-300 rounded-[2rem] flex items-center justify-center mx-auto">
+                        <Store size={48} />
+                      </div>
+                      <div className="space-y-2">
+                        <h3 className="text-xl font-bold text-dark-surface dark:text-white">No listings found</h3>
+                        <p className="text-slate-400 max-w-[200px] mx-auto text-sm">
+                          {marketSearchQuery ? "Try adjusting your search terms." : "Be the first to advertise your business here!"}
+                        </p>
+                      </div>
+                    </div>
+                  ) : (
+                    filteredMarketItems.map((business) => (
+                      <MarketCard 
+                        key={business.id} 
+                        business={business} 
+                        onClick={() => handleViewBusiness(business)} 
+                      />
+                    ))
+                  )}
+                </div>
+              </div>
             </div>
           </motion.div>
         )}
@@ -2571,10 +2715,10 @@ export default function App() {
                         <td className="px-6 py-5">
                           <div className="flex items-center gap-3">
                             <div className="w-10 h-10 bg-brand-50 dark:bg-brand-900/20 rounded-xl flex items-center justify-center text-brand-600 font-bold">
-                              {u.displayName[0]}
+                              {u.displayName ? u.displayName[0] : u.email[0].toUpperCase()}
                             </div>
                             <div>
-                              <p className="font-bold text-dark-surface dark:text-white">{u.displayName}</p>
+                              <p className="font-bold text-dark-surface dark:text-white">{u.displayName || 'Unnamed User'}</p>
                               <p className="text-xs text-slate-400">{u.email}</p>
                             </div>
                           </div>
@@ -3623,6 +3767,159 @@ export default function App() {
             </motion.div>
           </div>
         )}
+
+        {previewBusiness && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 sm:p-6">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setPreviewBusiness(null)}
+              className="absolute inset-0 bg-dark-surface/80 backdrop-blur-xl"
+            />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="relative w-full max-w-2xl bg-white dark:bg-slate-900 rounded-t-[3rem] sm:rounded-[3rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+            >
+              {/* Modal Header */}
+              <div className="px-6 sm:px-8 py-4 sm:py-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-3 sm:gap-4">
+                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400 rounded-2xl flex items-center justify-center shrink-0">
+                    <Store size={20} />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-lg sm:text-xl font-display font-bold text-dark-surface dark:text-white leading-tight truncate max-w-[150px] sm:max-w-md">{previewBusiness.title}</h3>
+                    <p className="text-[10px] sm:text-sm text-slate-400 font-medium">{previewBusiness.category} • {previewBusiness.price || 'Contact for Price'}</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setPreviewBusiness(null)}
+                  className="p-2 sm:p-3 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-2xl transition-colors text-slate-400 hover:text-dark-surface dark:hover:text-white"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+
+              {/* Modal Content */}
+              <div className="flex-1 overflow-y-auto p-4 sm:p-8 space-y-6">
+                {/* Image Carousel */}
+                <div className="relative aspect-video rounded-[2rem] overflow-hidden bg-slate-900 group">
+                  {previewBusiness.imageUrls.length > 0 ? (
+                    <div className="w-full h-full flex transition-transform duration-500 ease-out" style={{ transform: `translateX(-${currentImageIndex * 100}%)` }}>
+                      {previewBusiness.imageUrls.map((url, idx) => (
+                        <div key={idx} className="w-full h-full shrink-0 flex items-center justify-center bg-slate-900">
+                          <img 
+                            src={url} 
+                            alt={`${previewBusiness.title} - ${idx + 1}`}
+                            className="max-w-full max-h-full object-contain"
+                            referrerPolicy="no-referrer"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-slate-700">
+                      <Store size={64} />
+                    </div>
+                  )}
+
+                  {previewBusiness.imageUrls.length > 0 && (
+                    <button 
+                      onClick={() => setFullscreenImage(previewBusiness.imageUrls[currentImageIndex])}
+                      className="absolute top-4 right-4 p-3 bg-white/10 hover:bg-white/20 backdrop-blur-md rounded-2xl text-white transition-all opacity-0 group-hover:opacity-100 shadow-xl"
+                    >
+                      <Maximize2 size={20} />
+                    </button>
+                  )}
+
+                  {previewBusiness.imageUrls.length > 1 && (
+                    <>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setCurrentImageIndex(prev => prev === 0 ? previewBusiness.imageUrls.length - 1 : prev - 1);
+                        }}
+                        className="absolute left-4 top-1/2 -translate-y-1/2 p-3 bg-white/80 backdrop-blur-md rounded-full shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <ChevronLeft size={20} />
+                      </button>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setCurrentImageIndex(prev => prev === previewBusiness.imageUrls.length - 1 ? 0 : prev + 1);
+                        }}
+                        className="absolute right-4 top-1/2 -translate-y-1/2 p-3 bg-white/80 backdrop-blur-md rounded-full shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <ChevronRight size={20} />
+                      </button>
+                      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2">
+                        {previewBusiness.imageUrls.map((_, idx) => (
+                          <div 
+                            key={idx}
+                            className={cn(
+                              "w-2 h-2 rounded-full transition-all",
+                              currentImageIndex === idx ? "bg-white w-6" : "bg-white/50"
+                            )}
+                          />
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
+
+                {/* Description */}
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-lg font-bold text-dark-surface dark:text-white">Description</h4>
+                    <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-1.5 text-slate-500 bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-xl">
+                        <Eye size={16} />
+                        <span className="text-sm font-bold">{previewBusiness.viewedBy?.length || 0} Views</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-slate-500">
+                        <MapPin size={16} />
+                        <span className="text-sm font-medium">{previewBusiness.location}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <p className="text-slate-600 dark:text-slate-400 leading-relaxed whitespace-pre-wrap">
+                    {previewBusiness.description}
+                  </p>
+                </div>
+
+                {/* Seller Info */}
+                <div className="p-6 bg-slate-50 dark:bg-slate-800/50 rounded-3xl flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 bg-white dark:bg-slate-800 rounded-2xl flex items-center justify-center shadow-sm">
+                      <UserIcon size={24} className="text-slate-400" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Seller</p>
+                      <p className="font-bold text-dark-surface dark:text-white">{previewBusiness.authorName}</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Listed On</p>
+                    <p className="font-bold text-dark-surface dark:text-white">{new Date(previewBusiness.createdAt).toLocaleDateString()}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              <div className="px-8 py-6 border-t border-slate-100 dark:border-slate-800 shrink-0">
+                <a 
+                  href={`tel:${previewBusiness.contactPhone}`}
+                  className="w-full py-5 bg-brand-600 hover:bg-brand-700 text-white rounded-2xl font-bold transition-all shadow-xl shadow-brand-200 flex items-center justify-center gap-3 text-lg"
+                >
+                  <Phone size={24} />
+                  Contact Seller
+                </a>
+              </div>
+            </motion.div>
+          </div>
+        )}
       </AnimatePresence>
 
       {/* Business Listing Modal */}
@@ -3752,8 +4049,8 @@ export default function App() {
                 </div>
 
                 <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Images (1-3)</label>
-                  <div className="grid grid-cols-3 gap-3">
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Images (1-2)</label>
+                  <div className="grid grid-cols-2 gap-3">
                     <label className="aspect-square bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200 flex flex-col items-center justify-center cursor-pointer hover:bg-slate-100 transition-all">
                       <ImageIcon className="text-slate-400 mb-1" size={20} />
                       <span className="text-[10px] font-bold text-slate-400">Add</span>
@@ -3764,7 +4061,7 @@ export default function App() {
                         className="hidden" 
                         onChange={(e) => {
                           if (e.target.files) {
-                            const files = Array.from(e.target.files).slice(0, 3);
+                            const files = Array.from(e.target.files).slice(0, 2);
                             setSelectedBusinessImages(files);
                           }
                         }}
@@ -3787,7 +4084,7 @@ export default function App() {
                       </div>
                     ))}
                   </div>
-                  <p className="text-[10px] text-slate-400 font-medium italic">Max 3 images. First image will be the cover.</p>
+                  <p className="text-[10px] text-slate-400 font-medium italic">Max 2 images. First image will be the cover.</p>
                 </div>
 
                 <div className="pt-4">
@@ -4311,6 +4608,33 @@ export default function App() {
                   </p>
                 )}
               </form>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* Fullscreen Image Modal */}
+      <AnimatePresence>
+        {fullscreenImage && (
+          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/95 backdrop-blur-2xl p-4 sm:p-10">
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              className="relative w-full h-full flex items-center justify-center"
+            >
+              <button 
+                onClick={() => setFullscreenImage(null)}
+                className="absolute top-0 right-0 p-4 text-white/50 hover:text-white transition-colors z-10"
+              >
+                <X size={40} />
+              </button>
+              <img 
+                src={fullscreenImage} 
+                alt="Fullscreen Preview"
+                className="max-w-full max-h-full object-contain shadow-2xl rounded-lg"
+                referrerPolicy="no-referrer"
+              />
             </motion.div>
           </div>
         )}

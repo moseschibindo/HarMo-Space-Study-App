@@ -74,4 +74,5 @@ export interface BusinessListing {
   authorId: string;
   authorName: string;
   createdAt: string;
+  viewedBy?: string[];
 }

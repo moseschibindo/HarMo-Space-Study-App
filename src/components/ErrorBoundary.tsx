@@ -15,8 +15,18 @@ export function ErrorBoundary({ children }: Props) {
       setError(event.error);
     };
 
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      setHasError(true);
+      setError(event.reason instanceof Error ? event.reason : new Error(String(event.reason)));
+    };
+
     window.addEventListener('error', handleError);
-    return () => window.removeEventListener('error', handleError);
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+    
+    return () => {
+      window.removeEventListener('error', handleError);
+      window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+    };
   }, []);
 
   const handleReset = () => {
