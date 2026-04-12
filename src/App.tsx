@@ -19,6 +19,7 @@ import {
   User as UserIcon,
   ChevronRight,
   ChevronLeft,
+  ChevronUp,
   Heart,
   Bookmark,
   Settings,
@@ -52,6 +53,7 @@ import {
   TrendingUp,
   ArrowLeft,
   ShoppingBag,
+  Sparkles,
   ShieldAlert,
   Info,
   Tag,
@@ -67,6 +69,8 @@ import { cn } from './lib/utils';
 import { format } from 'date-fns';
 import { motion, AnimatePresence } from 'motion/react';
 import { Logo } from './components/Logo';
+import { GoogleGenAI } from "@google/genai";
+import { toast } from 'react-hot-toast';
 
 const LoadingText = () => {
   const [text, setText] = useState('Initializing Systems');
@@ -208,7 +212,7 @@ function MarketCard({ business, onClick, compact = false }: { business: Business
 
 export default function App() {
   const { user, profile, isAdmin, loading: authLoading, signIn, signUp, signOut, updateProfile } = useAuth();
-  const [activeTab, setActiveTab] = useState<'home' | 'marketplace' | 'profile' | 'admin' | 'lostfound' | 'notifications' | 'users' | 'manage-docs' | 'manage-notifications' | 'manage-lostfound' | 'manage-marketplace'>('home');
+  const [activeTab, setActiveTab] = useState<'home' | 'marketplace' | 'profile' | 'admin' | 'lostfound' | 'notifications' | 'users' | 'manage-docs' | 'manage-notifications' | 'manage-lostfound' | 'manage-marketplace' | 'my-resources'>('home');
   const [authView, setAuthView] = useState<'login' | 'signup'>('login');
   const [authFormData, setAuthFormData] = useState({
     email: '',
@@ -236,19 +240,29 @@ export default function App() {
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingDoc, setEditingDoc] = useState<StudyDocument | null>(null);
-  const [previewDoc, setPreviewDoc] = useState<StudyDocument | null>(null);
   const [previewBusiness, setPreviewBusiness] = useState<BusinessListing | null>(null);
   const [recentlyViewedBusinesses, setRecentlyViewedBusinesses] = useState<BusinessListing[]>([]);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
   const [readingDoc, setReadingDoc] = useState<StudyDocument | null>(null);
-  const [isFullscreen, setIsFullscreen] = useState(false);
-  const [isPreviewLoading, setIsPreviewLoading] = useState(true);
-  const [isReaderLoading, setIsReaderLoading] = useState(true);
+  const [showBackToTop, setShowBackToTop] = useState(false);
 
   useEffect(() => {
-    if (previewDoc) setIsPreviewLoading(true);
-  }, [previewDoc]);
+    const handleScroll = () => {
+      setShowBackToTop(window.scrollY > 400);
+    };
+    window.addEventListener('scroll', handleScroll);
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  const getGreeting = () => {
+    const hour = new Date().getHours();
+    if (hour < 12) return 'Good Morning';
+    if (hour < 17) return 'Good Afternoon';
+    return 'Good Evening';
+  };
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isReaderLoading, setIsReaderLoading] = useState(true);
 
   useEffect(() => {
     if (readingDoc) setIsReaderLoading(true);
@@ -346,8 +360,10 @@ export default function App() {
     url: '',
     category: 'General'
   });
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
+  const [uploadProgress, setUploadProgress] = useState<{ current: number; total: number } | null>(null);
   const [isUploading, setIsUploading] = useState(false);
+  const [restrictToPdf, setRestrictToPdf] = useState(false);
 
   useEffect(() => {
     fetchDocuments();
@@ -422,7 +438,7 @@ export default function App() {
     } else {
       setFormData({ title: '', description: '', type: 'pdf', url: '', category: 'General' });
     }
-    setSelectedFile(null);
+    setSelectedFiles([]);
   }, [editingDoc, isAddModalOpen]);
 
   const fetchNotifications = async () => {
@@ -585,75 +601,144 @@ export default function App() {
   const handleAddDocument = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
-    if (!selectedFile && !editingDoc) {
-      alert('Please select a file to upload');
+    if (selectedFiles.length === 0 && !editingDoc) {
+      alert('Please select at least one file to upload');
       return;
     }
 
     setIsUploading(true);
+    let successCount = 0;
+    const totalFiles = selectedFiles.length;
     try {
-      let fileUrl = formData.url;
+      if (editingDoc) {
+        // Single document update logic
+        let fileUrl = formData.url;
+        if (selectedFiles.length > 0) {
+          const file = selectedFiles[0];
+          const fileExt = file.name.split('.').pop();
+          const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
+          const filePath = `${user.id}/${fileName}`;
 
-      if (selectedFile) {
-        const fileExt = selectedFile.name.split('.').pop();
-        const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
-        const filePath = `${user.id}/${fileName}`;
+          const { error: uploadError } = await supabase.storage
+            .from('documents')
+            .upload(filePath, file);
 
-        // Ensure the bucket exists or handle the error gracefully
-        const { error: uploadError } = await supabase.storage
-          .from('documents')
-          .upload(filePath, selectedFile);
+          if (uploadError) throw uploadError;
 
-        if (uploadError) {
-          console.error('Storage upload error:', uploadError);
-          throw new Error(`Storage upload failed: ${uploadError.message}. Make sure the "documents" bucket exists in Supabase Storage.`);
+          const { data: { publicUrl } } = supabase.storage
+            .from('documents')
+            .getPublicUrl(filePath);
+          
+          fileUrl = publicUrl;
         }
 
-        const { data: { publicUrl } } = supabase.storage
-          .from('documents')
-          .getPublicUrl(filePath);
-        
-        fileUrl = publicUrl;
-      }
+        const docData = {
+          title: formData.title,
+          description: formData.description,
+          type: formData.type,
+          url: fileUrl,
+          category: formData.category,
+          status: isAdmin ? 'approved' : 'pending',
+          updated_at: new Date().toISOString()
+        };
 
-      const docData = {
-        title: formData.title,
-        description: formData.description,
-        type: formData.type,
-        url: fileUrl,
-        category: formData.category,
-        status: isAdmin ? 'approved' : 'pending',
-        updated_at: new Date().toISOString()
-      };
-
-      if (editingDoc) {
         const { error } = await supabase
           .from('documents')
           .update(docData)
           .eq('id', editingDoc.id);
         if (error) throw error;
       } else {
-        const { error } = await supabase
-          .from('documents')
-          .insert([{
-            ...docData,
-            author_id: user.id,
-            author_name: profile?.displayName || (isAdmin ? 'Admin' : 'User'),
-            created_at: new Date().toISOString(),
-          }]);
-        if (error) throw error;
+        // Bulk upload logic
+        setUploadProgress({ current: 0, total: selectedFiles.length });
+        
+        for (let i = 0; i < selectedFiles.length; i++) {
+          const file = selectedFiles[i];
+          setUploadProgress({ current: i + 1, total: selectedFiles.length });
+          
+          try {
+            const fileExt = file.name.split('.').pop();
+            const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
+            const filePath = `${user.id}/${fileName}`;
+
+            const { error: uploadError } = await supabase.storage
+              .from('documents')
+              .upload(filePath, file);
+
+            if (uploadError) throw uploadError;
+
+            const { data: { publicUrl } } = supabase.storage
+              .from('documents')
+              .getPublicUrl(filePath);
+
+            const docData = {
+              title: selectedFiles.length === 1 ? formData.title : file.name.split('.')[0],
+              description: formData.description,
+              type: (file.name.split('.').pop()?.toLowerCase() === 'docx' ? 'pdf' : 'pdf') as 'pdf' | 'docx', // Default to pdf for now, or detect
+              url: publicUrl,
+              category: formData.category,
+              status: isAdmin ? 'approved' : 'pending',
+              author_id: user.id,
+              author_name: profile?.displayName || (isAdmin ? 'Admin' : 'User'),
+              created_at: new Date().toISOString(),
+              updated_at: new Date().toISOString(),
+              file_size: file.size
+            };
+
+            // Better type detection
+            const actualExt = file.name.split('.').pop()?.toLowerCase();
+            if (actualExt === 'docx') docData.type = 'docx';
+
+            const { error } = await supabase
+              .from('documents')
+              .insert([docData]);
+            if (error) throw error;
+            successCount++;
+          } catch (fileErr) {
+            console.error(`Failed to upload ${file.name}:`, fileErr);
+            toast.error(`Failed to upload ${file.name}`);
+          }
+        }
       }
 
       setIsAddModalOpen(false);
       setEditingDoc(null);
-      setSelectedFile(null);
+      setSelectedFiles([]);
+      setUploadProgress(null);
+      setRestrictToPdf(false);
       setFormData({ title: '', description: '', type: 'pdf', url: '', category: 'General' });
       fetchDocuments();
+      
+      if (editingDoc) {
+        toast.success('Document updated');
+      } else {
+        if (successCount === totalFiles) {
+          toast.success(`Successfully uploaded all ${totalFiles} document(s)`);
+        } else if (successCount > 0) {
+          toast.success(`Uploaded ${successCount} of ${totalFiles} document(s)`);
+        } else {
+          toast.error('Failed to upload any documents');
+        }
+      }
     } catch (err: any) {
       console.error('Error saving document:', err);
-      alert(`Error: ${err.message || 'Failed to save document'}`);
+      toast.error(`Error: ${err.message || 'Failed to save document'}`);
     } finally {
       setIsUploading(false);
+    }
+  };
+
+  const handleDeleteDocument = async (id: string) => {
+    try {
+      const { error } = await supabase
+        .from('documents')
+        .delete()
+        .eq('id', id);
+      if (error) throw error;
+      setDocuments(prev => prev.filter(d => d.id !== id));
+      toast.success('Document deleted');
+    } catch (err: any) {
+      console.error('Error deleting document:', err);
+      toast.error('Failed to delete document');
     }
   };
 
@@ -728,62 +813,29 @@ export default function App() {
     setEditingNotification(null);
   };
 
-  const handleSuspendUser = async (userId: string) => {
-    const userToUpdate = users.find(u => u.uid === userId);
-    if (!userToUpdate) return;
-
-    const newStatus = userToUpdate.status === 'active' ? 'suspended' : 'active';
-    const newRole = newStatus === 'suspended' ? 'suspended' : 'student';
-
-    try {
-      const { error } = await supabase
-        .from('profiles')
-        .update({ 
-          status: newStatus,
-          role: newRole
-        })
-        .eq('uid', userId);
-
-      if (error) throw error;
-      setUsers(users.map(u => u.uid === userId ? { ...u, status: newStatus, role: newRole } : u));
-    } catch (err) {
-      console.error('Error suspending user:', err);
-    }
-  };
-
-  const handleDeleteUser = async (userId: string) => {
-    if (window.confirm('Are you sure you want to delete this user account? This action cannot be undone.')) {
-      try {
-        const { error } = await supabase
-          .from('profiles')
-          .delete()
-          .eq('uid', userId);
-
-        if (error) throw error;
-        setUsers(users.filter(u => u.uid !== userId));
-      } catch (err) {
-        console.error('Error deleting user:', err);
+  const handleSuspendUser = (userId: string) => {
+    setUsers(users.map(u => {
+      if (u.uid === userId) {
+        const newStatus = u.status === 'active' ? 'suspended' : 'active';
+        return { ...u, status: newStatus, role: newStatus === 'suspended' ? 'suspended' : 'student' };
       }
+      return u;
+    }));
+  };
+
+  const handleDeleteUser = (userId: string) => {
+    if (window.confirm('Are you sure you want to delete this user account? This action cannot be undone.')) {
+      setUsers(users.filter(u => u.uid !== userId));
     }
   };
 
-  const handlePromoteUser = async (userId: string) => {
-    const userToUpdate = users.find(u => u.uid === userId);
-    if (!userToUpdate) return;
-
-    const newRole = userToUpdate.role === 'admin' ? 'student' : 'admin';
-
-    try {
-      const { error } = await supabase
-        .from('profiles')
-        .update({ role: newRole })
-        .eq('uid', userId);
-
-      if (error) throw error;
-      setUsers(users.map(u => u.uid === userId ? { ...u, role: newRole } : u));
-    } catch (err) {
-      console.error('Error promoting user:', err);
-    }
+  const handlePromoteUser = (userId: string) => {
+    setUsers(users.map(u => {
+      if (u.uid === userId) {
+        return { ...u, role: u.role === 'admin' ? 'student' : 'admin' };
+      }
+      return u;
+    }));
   };
 
   const handleAddLostFound = async (e: React.FormEvent) => {
@@ -1235,12 +1287,18 @@ export default function App() {
     return matchesSearch && matchesStatus && matchesCategory;
   });
 
-  const myFilteredDocs = documents.filter(doc => {
-    if (!user || doc.authorId !== user.id) return false;
-    const matchesSearch = doc.title.toLowerCase().includes(myDocsFilter.search.toLowerCase());
-    const matchesStatus = myDocsFilter.status === 'all' || doc.status === myDocsFilter.status;
-    return matchesSearch && matchesStatus;
-  });
+  const [resourceTypeFilter, setResourceTypeFilter] = useState<'all' | 'documents' | 'marketplace' | 'lostfound'>('all');
+
+  const myFilteredResources = [
+    ...documents.filter(d => d.authorId === user?.id).map(d => ({ ...d, resourceType: 'document' as const })),
+    ...businessListings.filter(b => b.authorId === user?.id).map(b => ({ ...b, resourceType: 'marketplace' as const })),
+    ...lostFoundItems.filter(i => i.authorId === user?.id).map(i => ({ ...i, resourceType: 'lostfound' as const }))
+  ].filter(item => {
+    const matchesSearch = item.title.toLowerCase().includes(myDocsFilter.search.toLowerCase());
+    const matchesStatus = myDocsFilter.status === 'all' || item.status === myDocsFilter.status;
+    const matchesType = resourceTypeFilter === 'all' || item.resourceType === resourceTypeFilter;
+    return matchesSearch && matchesStatus && matchesType;
+  }).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
 
   return (
     <div className="min-h-screen bg-[#F0F7FF] dark:bg-[#020617] transition-colors duration-500">
@@ -1627,8 +1685,8 @@ export default function App() {
           </button>
 
           <div className="hidden md:flex flex-col items-end">
-            <span className="text-sm font-bold text-dark-surface dark:text-white">{profile?.displayName || 'Student'}</span>
-            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Active Now</span>
+            <span className="text-sm font-bold text-dark-surface dark:text-white">{getGreeting()}, {profile?.displayName?.split(' ')[0] || 'Student'}</span>
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Your Academic Universe</span>
           </div>
           
           <div className="relative">
@@ -1650,7 +1708,67 @@ export default function App() {
       </header>
 
       {/* Main Content */}
-      <main className="pt-28 space-y-8 pb-32 max-w-7xl mx-auto w-full">
+      <div className="flex min-h-screen">
+        {/* Desktop Sidebar */}
+        <aside className="hidden lg:flex w-72 flex-col fixed left-0 top-0 bottom-0 bg-white dark:bg-slate-900 border-r border-slate-100 dark:border-slate-800 z-50 pt-28 pb-8 px-6 space-y-8">
+          <div className="space-y-2">
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] px-4">Navigation</p>
+            <nav className="space-y-1">
+              {[
+                { id: 'home', label: 'Home', icon: Home },
+                { id: 'marketplace', label: 'Marketplace', icon: ShoppingBag },
+                { id: 'lostfound', label: 'Lost & Found', icon: Package },
+                { id: 'profile', label: 'My Profile', icon: UserIcon },
+              ].map((item) => (
+                <button
+                  key={item.id}
+                  onClick={() => setActiveTab(item.id as any)}
+                  className={cn(
+                    "w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl font-bold transition-all",
+                    activeTab === item.id 
+                      ? "bg-brand-600 text-white shadow-lg shadow-brand-200" 
+                      : "text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-brand-600"
+                  )}
+                >
+                  <item.icon size={20} />
+                  <span>{item.label}</span>
+                </button>
+              ))}
+            </nav>
+          </div>
+
+          {isAdmin && (
+            <div className="space-y-2">
+              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-[0.2em] px-4">Administration</p>
+              <nav className="space-y-1">
+                <button
+                  onClick={() => setActiveTab('admin')}
+                  className={cn(
+                    "w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl font-bold transition-all",
+                    activeTab === 'admin' 
+                      ? "bg-brand-600 text-white shadow-lg shadow-brand-200" 
+                      : "text-slate-500 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-brand-600"
+                  )}
+                >
+                  <Settings size={20} />
+                  <span>Admin Panel</span>
+                </button>
+              </nav>
+            </div>
+          )}
+
+          <div className="mt-auto pt-6 border-t border-slate-100 dark:border-slate-800">
+            <button 
+              onClick={signOut}
+              className="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-900/10 transition-all"
+            >
+              <LogOut size={20} />
+              <span>Sign Out</span>
+            </button>
+          </div>
+        </aside>
+
+        <main className="flex-1 lg:ml-72 pt-28 space-y-8 pb-32 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8">
         {activeTab === 'home' && (
           <>
             {/* Notifications Banner */}
@@ -1724,7 +1842,7 @@ export default function App() {
                       key={`recent-${doc.id}`}
                       whileHover={{ y: -5 }}
                       onClick={() => {
-                        setPreviewDoc(doc);
+                        setReadingDoc(doc);
                         incrementViews(doc.id);
                       }}
                       className="w-64 sm:w-72 shrink-0 glass-panel p-4 rounded-[2.5rem] space-y-4 group cursor-pointer"
@@ -1761,7 +1879,19 @@ export default function App() {
                         </button>
                       </div>
                       <div className="space-y-1 px-1">
-                        <h4 className="font-bold text-dark-surface dark:text-white truncate">{doc.title}</h4>
+                        <div className="flex items-center justify-between gap-2">
+                          <h4 className="font-bold text-dark-surface dark:text-white truncate flex-1">{doc.title}</h4>
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setReadingDoc(doc);
+                              incrementViews(doc.id);
+                            }}
+                            className="px-3 py-1 bg-brand-50 text-brand-600 rounded-lg text-[10px] font-bold hover:bg-brand-600 hover:text-white transition-all"
+                          >
+                            Read
+                          </button>
+                        </div>
                         <p className="text-xs text-slate-400 font-medium">{doc.category}</p>
                       </div>
                     </motion.div>
@@ -1782,7 +1912,7 @@ export default function App() {
                       key={`trending-${doc.id}`}
                       whileHover={{ y: -5 }}
                       onClick={() => {
-                        setPreviewDoc(doc);
+                        setReadingDoc(doc);
                         incrementViews(doc.id);
                       }}
                       className="w-72 sm:w-80 shrink-0 featured-card aspect-[16/10] relative overflow-hidden rounded-[2.5rem] cursor-pointer"
@@ -1814,13 +1944,25 @@ export default function App() {
                           <Bookmark size={16} fill={profile?.pinnedDocIds?.includes(doc.id) ? "currentColor" : "none"} />
                         </button>
                       </div>
-                      <div className="absolute bottom-6 left-6 right-6">
-                        <h4 className="text-lg font-display font-bold text-white truncate">{doc.title}</h4>
-                        <div className="flex items-center gap-2 text-white/70 text-[10px] font-bold uppercase tracking-widest">
-                          <span>{doc.category}</span>
-                          <span>•</span>
-                          <span>{doc.type}</span>
+                      <div className="absolute bottom-6 left-6 right-6 flex items-end justify-between gap-4">
+                        <div className="min-w-0">
+                          <h4 className="text-lg font-display font-bold text-white truncate">{doc.title}</h4>
+                          <div className="flex items-center gap-2 text-white/70 text-[10px] font-bold uppercase tracking-widest">
+                            <span>{doc.category}</span>
+                            <span>•</span>
+                            <span>{doc.type}</span>
+                          </div>
                         </div>
+                        <button 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setReadingDoc(doc);
+                            incrementViews(doc.id);
+                          }}
+                          className="px-4 py-2 bg-white text-brand-600 rounded-xl text-[10px] font-bold hover:bg-brand-600 hover:text-white transition-all shadow-lg shrink-0"
+                        >
+                          Read Now
+                        </button>
                       </div>
                     </motion.div>
                 ))}
@@ -1850,13 +1992,13 @@ export default function App() {
                   </p>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4 sm:gap-6 pb-8">
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 sm:gap-6 pb-8">
                   {filteredDocs.map((doc) => (
                     <motion.div
                       layout
                       key={`featured-${doc.id}`}
                       onClick={() => {
-                        setPreviewDoc(doc);
+                        setReadingDoc(doc);
                         incrementViews(doc.id);
                       }}
                       className="featured-card aspect-[3/4] relative overflow-hidden rounded-[2rem] cursor-pointer"
@@ -1901,12 +2043,12 @@ export default function App() {
                         <button 
                           onClick={(e) => {
                             e.stopPropagation();
-                            setPreviewDoc(doc);
+                            setReadingDoc(doc);
                             incrementViews(doc.id);
                           }}
                           className="w-full py-2 bg-white text-dark-surface rounded-xl font-bold text-[10px] shadow-xl shadow-brand-900/10 flex items-center justify-center gap-1 hover:scale-105 transition-transform"
                         >
-                          Preview
+                          Read Now
                           <ChevronRight size={10} />
                         </button>
                       </div>
@@ -2018,7 +2160,7 @@ export default function App() {
               {/* All Products Grid */}
               <div className="space-y-6">
                 <h3 className="text-xl font-bold text-dark-surface dark:text-white px-1">All Products</h3>
-                <div className="grid grid-cols-2 gap-3 sm:gap-6">
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-6">
                   {filteredMarketItems.length === 0 ? (
                     <div className="col-span-full text-center py-20 glass-panel rounded-[3rem] space-y-6">
                       <div className="w-24 h-24 bg-slate-50 text-slate-300 rounded-[2rem] flex items-center justify-center mx-auto">
@@ -2117,11 +2259,11 @@ export default function App() {
                 <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Account Actions</h3>
                 <div className="glass-panel p-6 rounded-[2.5rem] space-y-4">
                   <button 
-                    onClick={() => setActiveTab('my-docs')}
+                    onClick={() => setActiveTab('my-resources')}
                     className="w-full py-5 bg-brand-600 text-white rounded-[2rem] font-bold transition-all flex items-center justify-center gap-3 shadow-lg shadow-brand-200"
                   >
-                    <FileText size={20} />
-                    My Uploaded Documents
+                    <Package size={20} />
+                    My Resources
                   </button>
                   <button 
                     onClick={() => setTheme(prev => prev === 'light' ? 'dark' : 'light')}
@@ -2143,7 +2285,7 @@ export default function App() {
           </motion.div>
         )}
 
-        {activeTab === 'my-docs' && (
+        {activeTab === 'my-resources' && (
           <motion.div 
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
@@ -2158,22 +2300,25 @@ export default function App() {
                   <ChevronLeft size={24} />
                 </button>
                 <div className="space-y-1">
-                  <h1 className="text-3xl font-display font-bold text-dark-surface dark:text-white tracking-tight">My Documents</h1>
-                  <p className="text-slate-500 font-medium">Track and manage your study material uploads</p>
+                  <h1 className="text-3xl font-display font-bold text-dark-surface dark:text-white tracking-tight">My Resources</h1>
+                  <p className="text-slate-500 font-medium">Manage all your uploads in one place</p>
                 </div>
               </div>
               
-              <button 
-                onClick={() => {
-                  setEditingDoc(null);
-                  setFormData({ title: '', description: '', type: 'pdf', url: '', category: 'General' });
-                  setIsAddModalOpen(true);
-                }}
-                className="px-6 py-3 bg-brand-600 hover:bg-brand-700 text-white rounded-2xl font-bold transition-all shadow-lg shadow-brand-200 flex items-center justify-center gap-2"
-              >
-                <Plus size={20} />
-                Upload New
-              </button>
+              <div className="flex items-center gap-3">
+                <button 
+                  onClick={() => {
+                    setEditingDoc(null);
+                    setFormData({ title: '', description: '', type: 'pdf', url: '', category: 'General' });
+                    setRestrictToPdf(true);
+                    setIsAddModalOpen(true);
+                  }}
+                  className="px-6 py-3 bg-brand-600 hover:bg-brand-700 text-white rounded-2xl font-bold transition-all shadow-lg shadow-brand-200 flex items-center gap-2"
+                >
+                  <Plus size={20} />
+                  Add Document
+                </button>
+              </div>
             </div>
 
             {/* Filters */}
@@ -2183,21 +2328,32 @@ export default function App() {
                   <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-brand-600 transition-colors" size={18} />
                   <input 
                     type="text"
-                    placeholder="Search your documents..."
+                    placeholder="Search your resources..."
                     value={myDocsFilter.search}
                     onChange={(e) => setMyDocsFilter({...myDocsFilter, search: e.target.value})}
                     className="w-full pl-12 pr-6 py-4 bg-slate-50 dark:bg-slate-800/50 border-none rounded-2xl focus:ring-2 focus:ring-brand-500 transition-all"
                   />
                 </div>
                 
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-3">
+                  <select 
+                    value={resourceTypeFilter}
+                    onChange={(e) => setResourceTypeFilter(e.target.value as any)}
+                    className="px-6 py-4 bg-slate-50 dark:bg-slate-800/50 border-none rounded-2xl focus:ring-2 focus:ring-brand-500 transition-all text-sm font-bold text-slate-600 dark:text-slate-300 appearance-none min-w-[140px]"
+                  >
+                    <option value="all">All Types</option>
+                    <option value="documents">Documents</option>
+                    <option value="marketplace">Marketplace</option>
+                    <option value="lostfound">Lost & Found</option>
+                  </select>
+
                   <select 
                     value={myDocsFilter.status}
                     onChange={(e) => setMyDocsFilter({...myDocsFilter, status: e.target.value})}
-                    className="px-6 py-4 bg-slate-50 dark:bg-slate-800/50 border-none rounded-2xl focus:ring-2 focus:ring-brand-500 transition-all text-sm font-bold text-slate-600 dark:text-slate-300 appearance-none min-w-[160px]"
+                    className="px-6 py-4 bg-slate-50 dark:bg-slate-800/50 border-none rounded-2xl focus:ring-2 focus:ring-brand-500 transition-all text-sm font-bold text-slate-600 dark:text-slate-300 appearance-none min-w-[140px]"
                   >
                     <option value="all">All Status</option>
-                    <option value="pending">Pending Approval</option>
+                    <option value="pending">Pending</option>
                     <option value="approved">Approved</option>
                     <option value="rejected">Rejected</option>
                   </select>
@@ -2205,26 +2361,24 @@ export default function App() {
               </div>
             </div>
 
-            {/* Document List */}
+            {/* Resource List */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {myFilteredDocs.length === 0 ? (
+              {myFilteredResources.length === 0 ? (
                 <div className="col-span-full text-center py-20 glass-panel rounded-[3rem] space-y-6">
                   <div className="w-24 h-24 bg-slate-50 dark:bg-slate-800 text-slate-300 rounded-[2rem] flex items-center justify-center mx-auto">
-                    <FileText size={48} />
+                    <Package size={48} />
                   </div>
                   <div className="space-y-2">
-                    <h3 className="text-xl font-bold text-dark-surface dark:text-white">No documents found</h3>
+                    <h3 className="text-xl font-bold text-dark-surface dark:text-white">No resources found</h3>
                     <p className="text-slate-400 max-w-[250px] mx-auto text-sm">
-                      {myDocsFilter.search || myDocsFilter.status !== 'all' 
-                        ? "Try adjusting your filters." 
-                        : "You haven't uploaded any study materials yet."}
+                      Try adjusting your filters or upload something new.
                     </p>
                   </div>
                 </div>
               ) : (
-                myFilteredDocs.map((doc, index) => (
+                myFilteredResources.map((item, index) => (
                   <motion.div
-                    key={doc.id}
+                    key={item.id}
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: index * 0.05 }}
@@ -2232,56 +2386,87 @@ export default function App() {
                   >
                     <div className="flex items-start justify-between">
                       <div className="flex items-center gap-4">
-                        <div className="w-12 h-12 bg-brand-50 dark:bg-brand-900/20 rounded-2xl flex items-center justify-center text-brand-600 dark:text-brand-400 shadow-sm">
-                          <FileText size={24} />
+                        <div className={cn(
+                          "w-12 h-12 rounded-2xl flex items-center justify-center shadow-sm",
+                          item.resourceType === 'document' ? "bg-brand-50 text-brand-600 dark:bg-brand-900/20 dark:text-brand-400" :
+                          item.resourceType === 'marketplace' ? "bg-indigo-50 text-indigo-600 dark:bg-indigo-900/20 dark:text-indigo-400" :
+                          "bg-amber-50 text-amber-600 dark:bg-amber-900/20 dark:text-amber-400"
+                        )}>
+                          {item.resourceType === 'document' ? <FileText size={24} /> :
+                           item.resourceType === 'marketplace' ? <Store size={24} /> :
+                           <Package size={24} />}
                         </div>
                         <div>
-                          <h3 className="font-bold text-dark-surface dark:text-white truncate max-w-[150px]">{doc.title}</h3>
-                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{doc.category}</p>
+                          <h3 className="font-bold text-dark-surface dark:text-white truncate max-w-[150px]">{item.title}</h3>
+                          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">
+                            {item.resourceType === 'document' ? (item as any).category :
+                             item.resourceType === 'marketplace' ? (item as any).category :
+                             (item as any).type}
+                          </p>
                         </div>
                       </div>
                       <span className={cn(
                         "px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider",
-                        doc.status === 'approved' ? "bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-400" :
-                        doc.status === 'pending' ? "bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-400" :
+                        item.status === 'approved' ? "bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-400" :
+                        item.status === 'pending' ? "bg-amber-100 text-amber-600 dark:bg-amber-900/40 dark:text-amber-400" :
                         "bg-red-100 text-red-600 dark:bg-red-900/40 dark:text-red-400"
                       )}>
-                        {doc.status}
+                        {item.status}
                       </span>
                     </div>
 
-                    <p className="text-sm text-slate-500 line-clamp-2 leading-relaxed">{doc.description}</p>
+                    <p className="text-sm text-slate-500 line-clamp-2 leading-relaxed">{item.description}</p>
 
                     <div className="pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between">
                       <div className="flex items-center gap-2 text-[10px] font-bold text-slate-400 uppercase tracking-widest">
                         <Clock size={12} />
-                        {new Date(doc.createdAt).toLocaleDateString()}
+                        {new Date(item.createdAt).toLocaleDateString()}
                       </div>
                       <div className="flex items-center gap-2">
-                        <button 
-                          onClick={() => setPreviewDoc(doc)}
-                          className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-400 hover:text-brand-600 transition-all"
-                        >
-                          <Eye size={18} />
-                        </button>
-                        {doc.status !== 'approved' && (
+                        {item.resourceType === 'document' && (
                           <button 
-                            onClick={() => {
-                              setEditingDoc(doc);
-                              setFormData({
-                                title: doc.title,
-                                description: doc.description,
-                                type: doc.type,
-                                url: doc.url,
-                                category: doc.category
-                              });
-                              setIsAddModalOpen(true);
-                            }}
-                            className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-400 hover:text-brand-600 transition-all"
+                            onClick={() => setReadingDoc(item as any)}
+                            className="px-4 py-2 bg-brand-50 text-brand-600 rounded-xl text-xs font-bold hover:bg-brand-600 hover:text-white transition-all"
                           >
-                            <Edit3 size={18} />
+                            Read
                           </button>
                         )}
+                        <button 
+                          onClick={() => {
+                            if (item.resourceType === 'document') {
+                              const doc = item as any;
+                              setEditingDoc(doc);
+                              setFormData({ title: doc.title, description: doc.description, type: doc.type, url: doc.url, category: doc.category });
+                              setRestrictToPdf(false);
+                              setIsAddModalOpen(true);
+                            } else if (item.resourceType === 'marketplace') {
+                              const biz = item as any;
+                              setEditingBusiness(biz);
+                              setBusinessFormData({ title: biz.title, description: biz.description, price: biz.price || '', category: biz.category, location: biz.location, contactPhone: biz.contactPhone });
+                              setIsBusinessModalOpen(true);
+                            } else {
+                              const lf = item as any;
+                              setEditingLostFound(lf);
+                              setLostFoundFormData({ title: lf.title, description: lf.description, type: lf.type, location: lf.location, date: lf.date });
+                              setIsLostFoundModalOpen(true);
+                            }
+                          }}
+                          className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-400 hover:text-brand-600 transition-all"
+                        >
+                          <Edit3 size={18} />
+                        </button>
+                        <button 
+                          onClick={() => {
+                            if (confirm('Are you sure you want to delete this resource?')) {
+                              if (item.resourceType === 'document') handleDeleteDocument(item.id);
+                              else if (item.resourceType === 'marketplace') handleDeleteBusiness(item.id);
+                              else handleDeleteLostFound(item.id);
+                            }
+                          }}
+                          className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-all"
+                        >
+                          <Trash2 size={18} />
+                        </button>
                       </div>
                     </div>
                   </motion.div>
@@ -2427,6 +2612,19 @@ export default function App() {
                   <p className="text-slate-500 font-medium">View, edit, and delete all study materials</p>
                 </div>
               </div>
+
+              <button 
+                onClick={() => {
+                  setEditingDoc(null);
+                  setFormData({ title: '', description: '', type: 'pdf', url: '', category: 'General' });
+                  setRestrictToPdf(false);
+                  setIsAddModalOpen(true);
+                }}
+                className="px-6 py-3 bg-brand-600 text-white rounded-2xl font-bold flex items-center gap-2 shadow-lg shadow-brand-200 hover:scale-105 transition-all"
+              >
+                <Plus size={20} />
+                Add Document
+              </button>
             </div>
 
             {/* Stats Bar */}
@@ -2632,15 +2830,16 @@ export default function App() {
                         <td className="px-6 py-5">
                           <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                             <button 
-                              onClick={() => setPreviewDoc(doc)}
-                              title="Preview"
+                              onClick={() => setReadingDoc(doc)}
+                              title="Read"
                               className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-400 hover:text-brand-600 transition-all"
                             >
-                              <Eye size={18} />
+                              <BookOpen size={18} />
                             </button>
                             <button 
                               onClick={() => {
                                 setEditingDoc(doc);
+                                setRestrictToPdf(false);
                                 setIsAddModalOpen(true);
                               }}
                               title="Edit"
@@ -2715,10 +2914,10 @@ export default function App() {
                         <td className="px-6 py-5">
                           <div className="flex items-center gap-3">
                             <div className="w-10 h-10 bg-brand-50 dark:bg-brand-900/20 rounded-xl flex items-center justify-center text-brand-600 font-bold">
-                              {u.displayName ? u.displayName[0] : u.email[0].toUpperCase()}
+                              {u.displayName[0]}
                             </div>
                             <div>
-                              <p className="font-bold text-dark-surface dark:text-white">{u.displayName || 'Unnamed User'}</p>
+                              <p className="font-bold text-dark-surface dark:text-white">{u.displayName}</p>
                               <p className="text-xs text-slate-400">{u.email}</p>
                             </div>
                           </div>
@@ -3398,7 +3597,7 @@ export default function App() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
               {filteredLostFoundItems.length === 0 ? (
                 <div className="col-span-full text-center py-20 glass-panel rounded-[3rem] space-y-6">
                   <div className="w-24 h-24 bg-slate-50 text-slate-300 rounded-[2rem] flex items-center justify-center mx-auto">
@@ -3478,9 +3677,10 @@ export default function App() {
           </motion.div>
         )}
       </main>
+    </div>
 
       {/* Bottom Navigation */}
-      <div className="bottom-nav-container">
+      <div className="bottom-nav-container lg:hidden">
         <button 
           onClick={() => setActiveTab('home')}
           className={cn("bottom-nav-item", activeTab === 'home' ? "active" : "")}
@@ -3528,7 +3728,10 @@ export default function App() {
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
-              onClick={() => setIsAddModalOpen(false)}
+              onClick={() => {
+                setIsAddModalOpen(false);
+                setRestrictToPdf(false);
+              }}
               className="absolute inset-0 bg-dark-surface/60 backdrop-blur-md"
             />
             <motion.div 
@@ -3541,7 +3744,10 @@ export default function App() {
                 <h2 className="text-2xl sm:text-3xl font-display font-bold text-dark-surface">
                   {editingDoc ? 'Edit Material' : 'New Material'}
                 </h2>
-                <button onClick={() => setIsAddModalOpen(false)} className="p-3 hover:bg-slate-100 rounded-2xl transition-colors">
+                <button onClick={() => {
+                  setIsAddModalOpen(false);
+                  setRestrictToPdf(false);
+                }} className="p-3 hover:bg-slate-100 rounded-2xl transition-colors">
                   <X size={24} />
                 </button>
               </div>
@@ -3550,12 +3756,13 @@ export default function App() {
                 <div className="space-y-3">
                   <label className="text-sm font-bold text-slate-500 uppercase tracking-widest ml-1">Title</label>
                   <input 
-                    required
+                    required={!editingDoc && selectedFiles.length > 1 ? false : true}
+                    disabled={!editingDoc && selectedFiles.length > 1}
                     type="text"
                     value={formData.title}
                     onChange={e => setFormData({...formData, title: e.target.value})}
-                    placeholder="Calculus II Notes"
-                    className="w-full px-6 py-4 bg-slate-50 border-none rounded-2xl focus:ring-4 focus:ring-dark-surface/5 transition-all text-lg"
+                    placeholder={!editingDoc && selectedFiles.length > 1 ? "Titles will be set from filenames" : "Calculus II Notes"}
+                    className="w-full px-6 py-4 bg-slate-50 border-none rounded-2xl focus:ring-4 focus:ring-dark-surface/5 transition-all text-lg disabled:opacity-50"
                   />
                 </div>
 
@@ -3564,11 +3771,12 @@ export default function App() {
                     <label className="text-sm font-bold text-slate-500 uppercase tracking-widest ml-1">Type</label>
                     <select 
                       value={formData.type}
+                      disabled={restrictToPdf}
                       onChange={e => setFormData({...formData, type: e.target.value as 'pdf' | 'docx'})}
-                      className="w-full px-6 py-4 bg-slate-50 border-none rounded-2xl focus:ring-4 focus:ring-dark-surface/5 transition-all"
+                      className="w-full px-6 py-4 bg-slate-50 border-none rounded-2xl focus:ring-4 focus:ring-dark-surface/5 transition-all disabled:opacity-50"
                     >
                       <option value="pdf">PDF</option>
-                      <option value="docx">DOCX</option>
+                      {!restrictToPdf && <option value="docx">DOCX</option>}
                     </select>
                   </div>
                   <div className="space-y-3">
@@ -3585,23 +3793,28 @@ export default function App() {
                 </div>
 
                 <div className="space-y-3">
-                  <label className="text-sm font-bold text-slate-500 uppercase tracking-widest ml-1">Document File</label>
+                  <label className="text-sm font-bold text-slate-500 uppercase tracking-widest ml-1">Document File(s)</label>
                   <div className="relative">
                     <input 
                       type="file"
-                      accept=".pdf,.docx"
+                      accept={restrictToPdf ? ".pdf" : ".pdf,.docx"}
+                      multiple={!editingDoc}
                       onChange={e => {
-                        const file = e.target.files?.[0];
-                        if (file) {
-                          setSelectedFile(file);
-                          // Auto-fill title if empty
-                          if (!formData.title) {
-                            setFormData({...formData, title: file.name.split('.')[0]});
-                          }
-                          // Set type based on extension
-                          const ext = file.name.split('.').pop()?.toLowerCase();
-                          if (ext === 'pdf' || ext === 'docx') {
-                            setFormData({...formData, type: ext as 'pdf' | 'docx'});
+                        const files = Array.from(e.target.files || []);
+                        if (files.length > 0) {
+                          setSelectedFiles(files);
+                          
+                          // If single file, auto-fill title
+                          if (files.length === 1) {
+                            const file = files[0] as File;
+                            setFormData(prev => ({
+                              ...prev, 
+                              title: file.name.split('.')[0],
+                              type: (file.name.split('.').pop()?.toLowerCase() === 'docx' ? 'docx' : 'pdf') as 'pdf' | 'docx'
+                            }));
+                          } else {
+                            // Multiple files: clear title as it will be automatic
+                            setFormData(prev => ({...prev, title: ''}));
                           }
                         }
                       }}
@@ -3612,14 +3825,34 @@ export default function App() {
                       htmlFor="file-upload"
                       className="flex flex-col items-center justify-center w-full px-6 py-10 bg-slate-50 border-2 border-dashed border-slate-200 rounded-3xl cursor-pointer hover:bg-slate-100 hover:border-brand-300 transition-all group"
                     >
-                      {selectedFile ? (
-                        <div className="flex items-center gap-4">
-                          <div className="w-12 h-12 bg-brand-50 text-brand-600 rounded-2xl flex items-center justify-center">
-                            <FileText size={24} />
+                      {selectedFiles.length > 0 ? (
+                        <div className="space-y-4 w-full">
+                          <div className="flex items-center justify-center gap-3 text-brand-600">
+                            <FileText size={32} />
+                            <span className="font-bold text-lg">{selectedFiles.length} file(s) selected</span>
                           </div>
-                          <div className="text-left">
-                            <p className="font-bold text-dark-surface truncate max-w-[200px]">{selectedFile.name}</p>
-                            <p className="text-xs text-slate-400">{(selectedFile.size / 1024 / 1024).toFixed(2)} MB</p>
+                          <div className="max-h-32 overflow-y-auto space-y-2 px-4">
+                            {selectedFiles.map((file, idx) => (
+                              <div key={idx} className="flex items-center justify-between bg-white dark:bg-slate-800 p-2 rounded-xl border border-slate-100 dark:border-slate-700">
+                                <span className="text-xs font-medium text-slate-600 dark:text-slate-300 truncate max-w-[200px]">{file.name}</span>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-[10px] text-slate-400">{(file.size / 1024 / 1024).toFixed(2)} MB</span>
+                                  {!isUploading && (
+                                    <button 
+                                      type="button"
+                                      onClick={(e) => {
+                                        e.preventDefault();
+                                        e.stopPropagation();
+                                        setSelectedFiles(prev => prev.filter((_, i) => i !== idx));
+                                      }}
+                                      className="p-1 hover:bg-red-50 text-slate-400 hover:text-red-600 rounded-lg transition-all"
+                                    >
+                                      <X size={14} />
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
                           </div>
                         </div>
                       ) : (
@@ -3627,13 +3860,13 @@ export default function App() {
                           <div className="w-16 h-16 bg-white rounded-2xl flex items-center justify-center shadow-sm mb-4 group-hover:scale-110 transition-transform">
                             <Plus className="text-brand-600" size={32} />
                           </div>
-                          <p className="font-bold text-dark-surface">Choose a file</p>
-                          <p className="text-sm text-slate-400">PDF or DOCX up to 10MB</p>
+                          <p className="font-bold text-dark-surface">Choose file(s)</p>
+                          <p className="text-sm text-slate-400">{restrictToPdf ? "PDF only" : "PDF or DOCX"} up to 10MB each</p>
                         </>
                       )}
                     </label>
                   </div>
-                  {editingDoc && !selectedFile && (
+                  {editingDoc && selectedFiles.length === 0 && (
                     <p className="text-xs text-slate-400 ml-1 italic">Leave empty to keep existing file</p>
                   )}
                 </div>
@@ -3653,7 +3886,12 @@ export default function App() {
                   className="w-full py-5 bg-dark-surface hover:bg-black disabled:bg-slate-400 text-white rounded-[2rem] font-bold transition-all shadow-xl flex items-center justify-center gap-3 text-lg"
                 >
                   {isUploading ? (
-                    <CoolLoader size={32} />
+                    <div className="flex items-center gap-3">
+                      <CoolLoader size={32} />
+                      <span className="font-display">
+                        {uploadProgress ? `Uploading ${uploadProgress.current}/${uploadProgress.total}` : 'Uploading...'}
+                      </span>
+                    </div>
                   ) : (
                     <>
                       {editingDoc ? <Edit3 size={24} /> : <Plus size={24} />}
@@ -3666,108 +3904,8 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
-
-      {/* Preview Modal */}
+      {/* Business Preview Modal */}
       <AnimatePresence>
-        {previewDoc && (
-          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 sm:p-6">
-            <motion.div 
-              initial={{ opacity: 0 }}
-              animate={{ opacity: 1 }}
-              exit={{ opacity: 0 }}
-              onClick={() => setPreviewDoc(null)}
-              className="absolute inset-0 bg-dark-surface/80 backdrop-blur-xl"
-            />
-            <motion.div 
-              initial={{ scale: 0.9, opacity: 0, y: 20 }}
-              animate={{ scale: 1, opacity: 1, y: 0 }}
-              exit={{ scale: 0.9, opacity: 0, y: 20 }}
-              className="relative w-full max-w-4xl bg-white dark:bg-slate-900 rounded-t-[3rem] sm:rounded-[3rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
-            >
-              {/* Modal Header */}
-              <div className="px-6 sm:px-8 py-4 sm:py-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between shrink-0">
-                <div className="flex items-center gap-3 sm:gap-4">
-                  <div className="w-10 h-10 sm:w-12 sm:h-12 bg-brand-50 dark:bg-brand-900/20 text-brand-600 dark:text-brand-400 rounded-2xl flex items-center justify-center shrink-0">
-                    <FileText size={20} />
-                  </div>
-                  <div className="min-w-0">
-                    <h3 className="text-lg sm:text-xl font-display font-bold text-dark-surface dark:text-white leading-tight truncate max-w-[150px] sm:max-w-md">{previewDoc.title}</h3>
-                    <p className="text-[10px] sm:text-sm text-slate-400 font-medium">{previewDoc.category} • {previewDoc.type.toUpperCase()}</p>
-                  </div>
-                </div>
-                <button 
-                  onClick={() => setPreviewDoc(null)}
-                  className="p-2 sm:p-3 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-2xl transition-colors text-slate-400 hover:text-dark-surface dark:hover:text-white"
-                >
-                  <X size={24} />
-                </button>
-              </div>
-
-              {/* Modal Content (Preview Area) */}
-              <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-slate-50/50 dark:bg-slate-950/50">
-                <div className="max-w-4xl mx-auto space-y-8">
-                  {/* Real Document Preview */}
-                  <div className="glass-panel rounded-[2.5rem] overflow-hidden border border-slate-200 dark:border-slate-800 h-[500px] relative group bg-white">
-                    {isPreviewLoading && (
-                      <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-900 z-20">
-                        <div className="w-12 h-12 border-4 border-brand-200 border-t-brand-600 rounded-full animate-spin mb-4" />
-                        <p className="text-sm font-bold text-slate-500 animate-pulse">Generating Preview...</p>
-                      </div>
-                    )}
-                    <iframe 
-                      src={previewDoc.type === 'pdf' 
-                        ? `${previewDoc.url}#toolbar=0&navpanes=0&view=FitH` 
-                        : `https://docs.google.com/gview?embedded=1&url=${encodeURIComponent(previewDoc.url)}`
-                      }
-                      className="w-full h-full border-none"
-                      title="Document Preview"
-                      onLoad={() => setIsPreviewLoading(false)}
-                    />
-                    
-                    {/* Overlay to prevent interaction in preview */}
-                    <div className="absolute inset-0 bg-transparent z-10" />
-                  </div>
-
-                  {/* Document Info */}
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="p-6 bg-white rounded-3xl border border-slate-100 space-y-1">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Author</p>
-                      <p className="font-bold text-dark-surface">{previewDoc.authorName}</p>
-                    </div>
-                    <div className="p-6 bg-white rounded-3xl border border-slate-100 space-y-1">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Published</p>
-                      <p className="font-bold text-dark-surface">{new Date(previewDoc.createdAt).toLocaleDateString()}</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* Modal Footer */}
-              <div className="px-8 py-6 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row items-center gap-4 shrink-0">
-                <button 
-                  onClick={() => {
-                    setReadingDoc(previewDoc);
-                    setPreviewDoc(null);
-                  }}
-                  className="w-full sm:flex-1 py-4 bg-brand-600 hover:bg-brand-700 text-white rounded-2xl font-bold transition-all shadow-xl shadow-brand-200 flex items-center justify-center gap-3"
-                >
-                  <BookOpen size={20} />
-                  Read Now
-                </button>
-                <a 
-                  href={previewDoc.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="w-full sm:flex-1 py-4 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-300 rounded-2xl font-bold transition-all flex items-center justify-center gap-3"
-                >
-                  <Download size={20} />
-                  Download {previewDoc.type.toUpperCase()}
-                </a>
-              </div>
-            </motion.div>
-          </div>
-        )}
-
         {previewBusiness && (
           <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 sm:p-6">
             <motion.div 
@@ -4112,231 +4250,67 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* Advanced Reader Modal */}
+      {/* Direct Document Viewer Modal */}
       <AnimatePresence>
         {readingDoc && (
-          <div className={cn(
-            "fixed inset-0 z-[80] flex flex-col transition-all duration-500",
-            readerTheme === 'light' ? "bg-white" : readerTheme === 'sepia' ? "bg-[#f4ecd8]" : "bg-[#1a1a1a]",
-            isFullscreen ? "p-0" : ""
-          )}>
-            {/* Reader Header */}
-            <AnimatePresence>
-              {showReaderControls && !isFullscreen && (
-                <motion.header 
-                  initial={{ y: -100 }}
-                  animate={{ y: 0 }}
-                  exit={{ y: -100 }}
-                  className={cn(
-                    "px-4 sm:px-8 py-4 border-b flex flex-col sm:flex-row items-center justify-between backdrop-blur-md sticky top-0 z-10 transition-colors duration-500 gap-4",
-                    readerTheme === 'light' ? "bg-white/80 border-slate-100" : 
-                    readerTheme === 'sepia' ? "bg-[#f4ecd8]/80 border-[#e4dcc8]" : 
-                    "bg-[#1a1a1a]/80 border-white/5"
-                  )}
-                >
-                  <div className="flex items-center gap-4 w-full sm:w-auto">
-                    <button 
-                      onClick={() => setReadingDoc(null)}
-                      className={cn(
-                        "p-3 rounded-2xl transition-colors shrink-0 flex items-center gap-2",
-                        readerTheme === 'dark' ? "hover:bg-white/5 text-white/40 hover:text-white" : "hover:bg-slate-100 text-slate-400 hover:text-dark-surface"
-                      )}
-                    >
-                      <ChevronLeft size={24} />
-                      <span className="hidden sm:inline font-bold text-sm">Go Back</span>
-                    </button>
-                    <div className="min-w-0">
-                      <h3 className={cn(
-                        "text-base sm:text-lg font-display font-bold leading-tight truncate max-w-[200px] sm:max-w-md",
-                        readerTheme === 'dark' ? "text-white" : "text-dark-surface"
-                      )}>{readingDoc.title}</h3>
-                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">Reading Mode • {readingDoc.type.toUpperCase()}</p>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 w-full sm:w-auto justify-end">
-                    <div className="relative">
-                      <button 
-                        onClick={() => setIsReaderSearchOpen(!isReaderSearchOpen)}
-                        className={cn(
-                          "p-3 rounded-2xl transition-colors",
-                          isReaderSearchOpen ? "bg-brand-600 text-white" : 
-                          readerTheme === 'dark' ? "hover:bg-white/5 text-white/40" : "hover:bg-slate-100 text-slate-400"
-                        )}
-                      >
-                        <Search size={20} />
-                      </button>
-                      
-                      <AnimatePresence>
-                        {isReaderSearchOpen && (
-                          <motion.div 
-                            initial={{ opacity: 0, scale: 0.9, y: 10 }}
-                            animate={{ opacity: 1, scale: 1, y: 0 }}
-                            exit={{ opacity: 0, scale: 0.9, y: 10 }}
-                            className="absolute right-0 mt-2 w-72 glass-panel p-4 rounded-3xl z-50"
-                          >
-                            <input 
-                              autoFocus
-                              type="text"
-                              placeholder="Search in document..."
-                              value={readerSearchQuery}
-                              onChange={(e) => setReaderSearchQuery(e.target.value)}
-                              className="w-full px-4 py-3 bg-slate-50 border-none rounded-xl focus:ring-2 focus:ring-brand-500 transition-all text-sm"
-                            />
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
-
-                    <div className="relative">
-                      <button 
-                        onClick={() => setIsReaderSettingsOpen(!isReaderSettingsOpen)}
-                        className={cn(
-                          "p-3 rounded-2xl transition-colors",
-                          isReaderSettingsOpen ? "bg-brand-600 text-white" : 
-                          readerTheme === 'dark' ? "hover:bg-white/5 text-white/40" : "hover:bg-slate-100 text-slate-400"
-                        )}
-                      >
-                        <Settings size={20} />
-                      </button>
-
-                      <AnimatePresence>
-                        {isReaderSettingsOpen && (
-                          <motion.div 
-                            initial={{ opacity: 0, scale: 0.9, y: 10 }}
-                            animate={{ opacity: 1, scale: 1, y: 0 }}
-                            exit={{ opacity: 0, scale: 0.9, y: 10 }}
-                            className="absolute right-0 mt-2 w-80 glass-panel p-6 rounded-[2.5rem] z-50 space-y-6"
-                          >
-                            <div className="space-y-3">
-                              <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Theme</label>
-                              <div className="grid grid-cols-3 gap-2">
-                                {(['light', 'sepia', 'dark'] as const).map((t) => (
-                                  <button
-                                    key={t}
-                                    onClick={() => setReaderTheme(t)}
-                                    className={cn(
-                                      "py-3 rounded-xl border-2 transition-all text-xs font-bold capitalize",
-                                      readerTheme === t ? "border-brand-500 bg-brand-50 text-brand-600" : "border-slate-100 hover:border-slate-200 text-slate-500"
-                                    )}
-                                  >
-                                    {t}
-                                  </button>
-                                ))}
-                              </div>
-                            </div>
-
-                            <div className="space-y-3">
-                              <div className="flex items-center justify-between">
-                                <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Font Size</label>
-                                <span className="text-xs font-bold text-brand-600">{readerFontSize}px</span>
-                              </div>
-                              <input 
-                                type="range" 
-                                min="12" 
-                                max="32" 
-                                value={readerFontSize}
-                                onChange={(e) => setReaderFontSize(parseInt(e.target.value))}
-                                className="w-full accent-brand-600"
-                              />
-                            </div>
-                          </motion.div>
-                        )}
-                      </AnimatePresence>
-                    </div>
-
-                    <button 
-                      onClick={() => setReadingDoc(null)}
-                      className="ml-2 px-6 py-2.5 bg-dark-surface text-white rounded-xl font-bold text-sm flex items-center gap-2"
-                    >
-                      <X size={16} />
-                      Go Back
-                    </button>
-                  </div>
-                </motion.header>
-              )}
-            </AnimatePresence>
-
-            {/* Reader Content */}
-            <main className={cn(
-              "flex-1 overflow-y-auto flex justify-center transition-all duration-500",
-              readerTheme === 'light' ? "bg-slate-50" : readerTheme === 'sepia' ? "bg-[#e4dcc8]" : "bg-black",
-              isFullscreen ? "p-0" : "p-4 sm:p-12"
-            )}>
-              <div 
-                className={cn(
-                  "w-full shadow-2xl transition-all duration-500 relative overflow-hidden flex flex-col",
-                  readerTheme === 'light' ? "bg-white" : readerTheme === 'sepia' ? "bg-[#f4ecd8]" : "bg-[#1a1a1a]",
-                  isFullscreen ? "max-w-none rounded-0" : "max-w-5xl rounded-[2rem]",
-                  "min-h-[80vh]"
-                )}
-              >
-                {readingDoc && (
-                  <div className="w-full h-full bg-white relative overflow-hidden">
-                    {isReaderLoading && (
-                      <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-50 dark:bg-slate-900 z-20">
-                        <div className="w-16 h-16 border-4 border-brand-200 border-t-brand-600 rounded-full animate-spin mb-4" />
-                        <p className="text-lg font-bold text-slate-600 dark:text-slate-300 animate-pulse">Loading Document...</p>
-                        <p className="text-sm text-slate-400 mt-2">Preparing your reading experience</p>
-                      </div>
-                    )}
-                    <iframe 
-                      src={readingDoc.type === 'pdf' 
-                        ? `${readingDoc.url}#view=FitH` 
-                        : `https://docs.google.com/gview?embedded=1&url=${encodeURIComponent(readingDoc.url)}`
-                      }
-                      className="w-full h-full border-none"
-                      title={readingDoc.title}
-                      onLoad={() => setIsReaderLoading(false)}
-                      style={{
-                        borderRadius: isFullscreen ? "0" : "2rem",
-                      }}
-                    />
-                  </div>
-                )}
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] bg-slate-900/95 backdrop-blur-2xl flex flex-col"
+          >
+            {/* Minimal Header */}
+            <div className="h-20 flex items-center justify-between px-6 sm:px-10 shrink-0">
+              <div className="flex items-center gap-4 min-w-0">
+                <div className="w-12 h-12 bg-brand-600 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-brand-500/20 shrink-0">
+                  <FileText size={24} />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-white text-lg font-display font-bold truncate max-w-[200px] sm:max-w-xl">{readingDoc.title}</h3>
+                  <p className="text-[10px] text-slate-400 font-bold uppercase tracking-[0.2em]">{readingDoc.type.toUpperCase()} • {readingDoc.category}</p>
+                </div>
               </div>
-            </main>
-
-            {/* Reader Controls (Floating) */}
-            <AnimatePresence>
-              {showReaderControls && (
-                <motion.div 
-                  initial={{ y: 100, x: '-50%', opacity: 0 }}
-                  animate={{ y: 0, x: '-50%', opacity: 1 }}
-                  exit={{ y: 100, x: '-50%', opacity: 0 }}
-                  className="fixed bottom-10 left-1/2 bg-dark-surface/90 backdrop-blur-xl text-white px-8 py-4 rounded-full flex items-center gap-8 shadow-2xl border border-white/10 z-20"
+              
+              <div className="flex items-center gap-4">
+                <a 
+                  href={readingDoc.url} 
+                  target="_blank" 
+                  rel="noopener noreferrer"
+                  className="hidden md:flex items-center gap-2 px-5 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold transition-all border border-white/10"
                 >
-                  <div className="flex items-center gap-4 border-r border-white/10 pr-8">
-                    <button className="hover:text-brand-400 transition-colors"><ChevronLeft size={24} /></button>
-                    <span className="font-bold text-sm">1 / 42</span>
-                    <button className="hover:text-brand-400 transition-colors"><ChevronRight size={24} /></button>
+                  <ExternalLink size={16} />
+                  Open Native
+                </a>
+                <button 
+                  onClick={() => setReadingDoc(null)}
+                  className="w-12 h-12 flex items-center justify-center bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white rounded-2xl transition-all border border-red-500/20"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+            </div>
+
+            {/* Viewer Content */}
+            <div className="flex-1 p-4 sm:p-6 sm:pt-0">
+              <div className="w-full h-full bg-white rounded-[2.5rem] overflow-hidden shadow-2xl relative">
+                {isReaderLoading && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-center bg-slate-50 z-10">
+                    <div className="w-16 h-16 border-4 border-brand-100 border-t-brand-600 rounded-full animate-spin mb-6" />
+                    <p className="text-slate-400 font-bold tracking-widest uppercase text-xs animate-pulse">Initializing Viewer</p>
                   </div>
-                  <div className="flex items-center gap-6">
-                    <div className="flex items-center gap-3">
-                      <button 
-                        onClick={() => setReaderZoom(Math.max(50, readerZoom - 10))}
-                        className="hover:text-brand-400 transition-colors"
-                      >
-                        <ZoomOut size={20} />
-                      </button>
-                      <span className="text-xs font-bold w-10 text-center">{readerZoom}%</span>
-                      <button 
-                        onClick={() => setReaderZoom(Math.min(200, readerZoom + 10))}
-                        className="hover:text-brand-400 transition-colors"
-                      >
-                        <ZoomIn size={20} />
-                      </button>
-                    </div>
-                    <button 
-                      onClick={toggleFullscreen}
-                      className="hover:text-brand-400 transition-colors"
-                    >
-                      {isFullscreen ? <Minimize2 size={20} /> : <Maximize2 size={20} />}
-                    </button>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
+                )}
+                <iframe 
+                  src={readingDoc.type === 'pdf' 
+                    ? `${readingDoc.url}#view=FitH&scrollbar=1&toolbar=1` 
+                    : `https://docs.google.com/gview?embedded=1&url=${encodeURIComponent(readingDoc.url)}`
+                  }
+                  className="w-full h-full border-none"
+                  title={readingDoc.title}
+                  onLoad={() => setIsReaderLoading(false)}
+                />
+              </div>
+            </div>
+          </motion.div>
         )}
       </AnimatePresence>
       {/* Notification Modal */}
@@ -4637,6 +4611,20 @@ export default function App() {
               />
             </motion.div>
           </div>
+        )}
+      </AnimatePresence>
+      {/* Back to Top Button */}
+      <AnimatePresence>
+        {showBackToTop && (
+          <motion.button
+            initial={{ opacity: 0, scale: 0.5, y: 20 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.5, y: 20 }}
+            onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}
+            className="fixed bottom-24 sm:bottom-32 right-6 sm:right-10 z-[45] p-4 bg-brand-600 text-white rounded-2xl shadow-2xl shadow-brand-200 hover:scale-110 transition-all lg:bottom-10"
+          >
+            <ChevronUp size={24} />
+          </motion.button>
         )}
       </AnimatePresence>
     </>
