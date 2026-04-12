@@ -241,6 +241,7 @@ export default function App() {
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingDoc, setEditingDoc] = useState<StudyDocument | null>(null);
   const [previewBusiness, setPreviewBusiness] = useState<BusinessListing | null>(null);
+  const [previewLostFound, setPreviewLostFound] = useState<LostFoundItem | null>(null);
   const [recentlyViewedBusinesses, setRecentlyViewedBusinesses] = useState<BusinessListing[]>([]);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
   const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
@@ -745,11 +746,25 @@ export default function App() {
   const handleApproveDocument = async (id: string, status: 'approved' | 'rejected') => {
     if (!isAdmin) return;
     try {
+      const doc = documents.find(d => d.id === id);
       const { error } = await supabase
         .from('documents')
         .update({ status })
         .eq('id', id);
       if (error) throw error;
+      
+      if (doc) {
+        await supabase.from('notifications').insert([{
+          title: `Document ${status === 'approved' ? 'Approved' : 'Rejected'}`,
+          message: `Your document "${doc.title}" has been ${status}.`,
+          type: status === 'approved' ? 'success' : 'warning',
+          active: true,
+          showOnHome: false,
+          read: false,
+          created_at: new Date().toISOString()
+        }]);
+      }
+      
       fetchDocuments();
     } catch (err) {
       console.error('Error approving/rejecting document:', err);
@@ -793,24 +808,89 @@ export default function App() {
     }
   };
 
-  const handleAddNotification = (e: React.FormEvent) => {
+  const handleAddNotification = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (editingNotification) {
-      setNotifications(notifications.map(n => n.id === editingNotification.id ? {
-        ...n,
-        ...notificationFormData
-      } : n));
-    } else {
-      const newNotif: Notification = {
-        id: Math.random().toString(36).substr(2, 9),
-        ...notificationFormData,
-        createdAt: new Date().toISOString(),
-        read: false
-      };
-      setNotifications([newNotif, ...notifications]);
+    try {
+      if (editingNotification) {
+        const { error } = await supabase
+          .from('notifications')
+          .update({
+            ...notificationFormData,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', editingNotification.id);
+        if (error) throw error;
+        toast.success('Notification updated');
+      } else {
+        const { error } = await supabase
+          .from('notifications')
+          .insert([{
+            ...notificationFormData,
+            created_at: new Date().toISOString(),
+            read: false
+          }]);
+        if (error) throw error;
+        toast.success('Notification created');
+      }
+      setIsNotificationModalOpen(false);
+      setEditingNotification(null);
+      fetchNotifications();
+    } catch (err: any) {
+      console.error('Error saving notification:', err);
+      toast.error(`Error: ${err.message}`);
     }
-    setIsNotificationModalOpen(false);
-    setEditingNotification(null);
+  };
+
+  const handleMarkAsRead = async (id: string) => {
+    try {
+      const { error } = await supabase
+        .from('notifications')
+        .update({ read: true })
+        .eq('id', id);
+      if (error) throw error;
+      setNotifications(prev => prev.map(n => n.id === id ? { ...n, read: true } : n));
+    } catch (err) {
+      console.error('Error marking as read:', err);
+      toast.error('Failed to update notification');
+    }
+  };
+
+  const handleMarkAllAsRead = async () => {
+    try {
+      const unreadIds = notifications.filter(n => !n.read).map(n => n.id);
+      if (unreadIds.length === 0) return;
+
+      const { error } = await supabase
+        .from('notifications')
+        .update({ read: true })
+        .in('id', unreadIds);
+      if (error) throw error;
+      setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+      toast.success('All notifications marked as read');
+    } catch (err) {
+      console.error('Error marking all as read:', err);
+      toast.error('Failed to update notifications');
+    }
+  };
+
+  const handleClearRead = async () => {
+    try {
+      const readIds = notifications.filter(n => n.read).map(n => n.id);
+      if (readIds.length === 0) return;
+
+      if (!confirm(`Are you sure you want to clear ${readIds.length} read notifications?`)) return;
+
+      const { error } = await supabase
+        .from('notifications')
+        .delete()
+        .in('id', readIds);
+      if (error) throw error;
+      setNotifications(prev => prev.filter(n => !n.read));
+      toast.success('Read notifications cleared');
+    } catch (err) {
+      console.error('Error clearing read notifications:', err);
+      toast.error('Failed to clear notifications');
+    }
   };
 
   const handleSuspendUser = (userId: string) => {
@@ -952,11 +1032,25 @@ export default function App() {
   const handleApproveLostFound = async (id: string, status: 'approved' | 'rejected') => {
     if (!isAdmin) return;
     try {
+      const item = lostFoundItems.find(i => i.id === id);
       const { error } = await supabase
         .from('lost_found')
         .update({ status })
         .eq('id', id);
       if (error) throw error;
+
+      if (item) {
+        await supabase.from('notifications').insert([{
+          title: `Lost & Found Item ${status === 'approved' ? 'Approved' : 'Rejected'}`,
+          message: `Your item "${item.title}" has been ${status}.`,
+          type: status === 'approved' ? 'success' : 'warning',
+          active: true,
+          showOnHome: false,
+          read: false,
+          created_at: new Date().toISOString()
+        }]);
+      }
+
       fetchLostFound();
     } catch (err) {
       console.error('Error approving/rejecting item:', err);
@@ -1071,11 +1165,25 @@ export default function App() {
   const handleApproveBusiness = async (id: string, status: 'approved' | 'rejected') => {
     if (!isAdmin) return;
     try {
+      const business = businessListings.find(b => b.id === id);
       const { error } = await supabase
         .from('businesses')
         .update({ status })
         .eq('id', id);
       if (error) throw error;
+
+      if (business) {
+        await supabase.from('notifications').insert([{
+          title: `Business Listing ${status === 'approved' ? 'Approved' : 'Rejected'}`,
+          message: `Your listing "${business.title}" has been ${status}.`,
+          type: status === 'approved' ? 'success' : 'warning',
+          active: true,
+          showOnHome: false,
+          read: false,
+          created_at: new Date().toISOString()
+        }]);
+      }
+
       fetchBusinessListings();
     } catch (err) {
       console.error('Error updating business status:', err);
@@ -2493,14 +2601,14 @@ export default function App() {
               </div>
               <div className="flex items-center gap-3">
                 <button 
-                  onClick={() => setNotifications(notifications.map(n => ({ ...n, read: true })))}
+                  onClick={handleMarkAllAsRead}
                   className="p-3 bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-400 rounded-2xl border border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800 transition-all flex items-center gap-2 text-sm font-bold"
                 >
                   <CheckCheck size={18} />
                   <span className="hidden sm:inline">Mark all as read</span>
                 </button>
                 <button 
-                  onClick={() => setNotifications(notifications.filter(n => !n.read))}
+                  onClick={handleClearRead}
                   className="p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-2xl border border-red-100 dark:border-red-500/20 hover:bg-red-100 dark:hover:bg-red-900/30 transition-all flex items-center gap-2 text-sm font-bold"
                 >
                   <Trash size={18} />
@@ -2560,14 +2668,14 @@ export default function App() {
                       <div className="pt-4 flex items-center gap-3">
                         {!notif.read && (
                           <button 
-                            onClick={() => setNotifications(notifications.map(n => n.id === notif.id ? { ...n, read: true } : n))}
+                            onClick={() => handleMarkAsRead(notif.id)}
                             className="text-xs font-bold text-brand-600 dark:text-brand-400 hover:underline"
                           >
                             Mark as read
                           </button>
                         )}
                         <button 
-                          onClick={() => setNotifications(notifications.filter(n => n.id !== notif.id))}
+                          onClick={() => handleDeleteNotification(notif.id)}
                           className="text-xs font-bold text-red-500 hover:underline"
                         >
                           Delete
@@ -3374,18 +3482,18 @@ export default function App() {
 
             <div className="grid grid-cols-1 gap-4">
               {lostFoundItems.map(item => (
-                <div key={item.id} className="glass-panel p-6 rounded-[2.5rem] flex items-center justify-between gap-4">
+                <div key={item.id} className="glass-panel p-4 sm:p-6 rounded-[2rem] sm:rounded-[2.5rem] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div className="flex items-center gap-4">
                     <div className={cn(
-                      "w-12 h-12 rounded-2xl flex items-center justify-center",
+                      "w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0",
                       item.type === 'lost' ? "bg-red-50 text-red-600" : "bg-emerald-50 text-emerald-600"
                     )}>
-                      <Package size={24} />
+                      <Package size={20} className="sm:w-6 sm:h-6" />
                     </div>
-                    <div>
-                      <h4 className="font-bold text-lg text-dark-surface dark:text-white">{item.title}</h4>
-                      <p className="text-sm text-slate-500">{item.location} • {item.date}</p>
-                      <div className="flex items-center gap-3 mt-1">
+                    <div className="min-w-0">
+                      <h4 className="font-bold text-base sm:text-lg text-dark-surface dark:text-white truncate">{item.title}</h4>
+                      <p className="text-xs sm:text-sm text-slate-500 truncate">{item.location} • {item.date}</p>
+                      <div className="flex items-center gap-2 sm:gap-3 mt-1">
                         <span className={cn(
                           "text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-widest",
                           item.status === 'approved' ? "bg-emerald-100 text-emerald-600" :
@@ -3488,15 +3596,15 @@ export default function App() {
 
             <div className="grid grid-cols-1 gap-4">
               {businessListings.map(business => (
-                <div key={business.id} className="glass-panel p-6 rounded-[2.5rem] flex items-center justify-between gap-4">
+                <div key={business.id} className="glass-panel p-4 sm:p-6 rounded-[2rem] sm:rounded-[2.5rem] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center">
-                      <Store size={24} />
+                    <div className="w-10 h-10 sm:w-12 sm:h-12 bg-indigo-50 text-indigo-600 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0">
+                      <Store size={20} className="sm:w-6 sm:h-6" />
                     </div>
-                    <div>
-                      <h4 className="font-bold text-lg text-dark-surface dark:text-white">{business.title}</h4>
-                      <p className="text-sm text-slate-500">{business.category} • {business.price || 'No price'}</p>
-                      <div className="flex items-center gap-3 mt-1">
+                    <div className="min-w-0">
+                      <h4 className="font-bold text-base sm:text-lg text-dark-surface dark:text-white truncate">{business.title}</h4>
+                      <p className="text-xs sm:text-sm text-slate-500 truncate">{business.category} • {business.price || 'No price'}</p>
+                      <div className="flex items-center gap-2 sm:gap-3 mt-1">
                         <span className={cn(
                           "text-[10px] px-2 py-0.5 rounded-full font-bold uppercase tracking-widest",
                           business.status === 'approved' ? "bg-emerald-100 text-emerald-600" :
@@ -3566,7 +3674,7 @@ export default function App() {
           >
             <div className="flex items-center justify-between">
               <div className="space-y-1">
-                <h1 className="text-3xl font-display font-bold text-dark-surface dark:text-white tracking-tight">Lost & Found</h1>
+                <h1 className="text-2xl sm:text-3xl font-display font-bold text-dark-surface dark:text-white tracking-tight">Lost & Found</h1>
                 <p className="text-slate-500 font-medium">Help others find their belongings.</p>
               </div>
               <button 
@@ -3616,60 +3724,65 @@ export default function App() {
                 </div>
               ) : (
                 filteredLostFoundItems.map(item => (
-                  <div key={item.id} className="glass-panel p-4 sm:p-6 rounded-[2rem] sm:rounded-[2.5rem] space-y-3 sm:space-y-4 flex flex-col">
+                  <div 
+                    key={item.id} 
+                    onClick={() => setPreviewLostFound(item)}
+                    className="glass-panel p-3 sm:p-6 rounded-2xl sm:rounded-[2.5rem] space-y-3 sm:space-y-4 flex flex-col cursor-pointer hover:shadow-2xl hover:shadow-brand-500/10 transition-all group"
+                  >
                     <div className="flex items-start justify-between">
-                      <div className="flex items-center gap-4">
+                      <div className="flex items-center gap-2 sm:gap-4">
                         <div className={cn(
-                          "w-12 h-12 rounded-2xl flex items-center justify-center shrink-0",
+                          "w-10 h-10 sm:w-12 sm:h-12 rounded-xl sm:rounded-2xl flex items-center justify-center shrink-0",
                           item.type === 'lost' ? "bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400" : "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400"
                         )}>
-                          <Package size={24} />
+                          <Package size={20} className="sm:w-6 sm:h-6" />
                         </div>
-                        <div>
+                        <div className="min-w-0">
                           <span className={cn(
-                            "text-[10px] font-bold uppercase tracking-widest px-2 py-1 rounded-md",
+                            "text-[8px] sm:text-[10px] font-bold uppercase tracking-widest px-1.5 py-0.5 rounded-md",
                             item.type === 'lost' ? "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400" : "bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400"
                           )}>
                             {item.type}
                           </span>
-                          <h3 className="text-xl font-bold text-dark-surface dark:text-white mt-1 line-clamp-1">{item.title}</h3>
+                          <h3 className="text-sm sm:text-xl font-bold text-dark-surface dark:text-white mt-0.5 sm:mt-1 line-clamp-1">{item.title}</h3>
                         </div>
                       </div>
                     </div>
                     {item.imageUrl && (
-                      <div className="relative aspect-video rounded-2xl overflow-hidden bg-slate-100 cursor-pointer" onClick={() => setFullscreenImage(item.imageUrl)}>
+                      <div className="relative aspect-video rounded-2xl overflow-hidden bg-slate-100">
                         <img 
                           src={item.imageUrl} 
                           alt={item.title}
-                          className="w-full h-full object-cover transition-transform duration-500 hover:scale-110"
+                          className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
                           referrerPolicy="no-referrer"
                         />
                       </div>
                     )}
-                    <p className="text-slate-600 leading-relaxed line-clamp-3 flex-1">{item.description}</p>
-                    <div className="grid grid-cols-2 gap-4 pt-2">
-                      <div className="flex items-center gap-2 text-slate-500">
-                        <MapPin size={16} />
-                        <span className="text-sm font-medium truncate">{item.location}</span>
+                    <p className="text-xs sm:text-slate-600 leading-relaxed line-clamp-2 sm:line-clamp-3 flex-1">{item.description}</p>
+                    <div className="flex flex-col gap-1.5 sm:grid sm:grid-cols-2 sm:gap-4 pt-2">
+                      <div className="flex items-center gap-1.5 sm:gap-2 text-slate-500">
+                        <MapPin size={14} className="sm:w-4 sm:h-4" />
+                        <span className="text-[10px] sm:text-sm font-medium truncate">{item.location}</span>
                       </div>
-                      <div className="flex items-center gap-2 text-slate-500">
-                        <Calendar size={16} />
-                        <span className="text-sm font-medium">{format(new Date(item.date), 'MMM d, yyyy')}</span>
+                      <div className="flex items-center gap-1.5 sm:gap-2 text-slate-500">
+                        <Calendar size={14} className="sm:w-4 sm:h-4" />
+                        <span className="text-[10px] sm:text-sm font-medium">{format(new Date(item.date), 'MMM d')}</span>
                       </div>
                     </div>
-                    <div className="pt-4 border-t border-slate-100 flex items-center justify-between">
+                    <div className="pt-3 sm:pt-4 border-t border-slate-100 flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
                       <div className="flex items-center gap-2">
-                        <div className="w-8 h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-400">
-                          <UserIcon size={14} />
+                        <div className="w-6 h-6 sm:w-8 sm:h-8 bg-slate-100 rounded-full flex items-center justify-center text-slate-400">
+                          <UserIcon size={12} className="sm:w-3.5 sm:h-3.5" />
                         </div>
-                        <span className="text-xs font-bold text-slate-500 truncate max-w-[80px]">{item.authorName}</span>
+                        <span className="text-[10px] sm:text-xs font-bold text-slate-500 truncate max-w-[60px] sm:max-w-[80px]">{item.authorName}</span>
                       </div>
                       {item.authorPhone && (
                         <a 
                           href={`tel:${item.authorPhone}`}
-                          className="flex items-center gap-2 text-brand-600 font-bold text-sm"
+                          onClick={(e) => e.stopPropagation()}
+                          className="flex items-center gap-1.5 sm:gap-2 text-brand-600 font-bold text-[10px] sm:text-sm"
                         >
-                          <Phone size={16} />
+                          <Phone size={14} className="sm:w-4 sm:h-4" />
                           Contact
                         </a>
                       )}
@@ -4060,6 +4173,119 @@ export default function App() {
                   Contact Seller
                 </a>
               </div>
+            </motion.div>
+          </div>
+        )}
+
+        {previewLostFound && (
+          <div className="fixed inset-0 z-[70] flex items-center justify-center p-4 sm:p-6">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setPreviewLostFound(null)}
+              className="absolute inset-0 bg-dark-surface/80 backdrop-blur-xl"
+            />
+            <motion.div 
+              initial={{ scale: 0.9, opacity: 0, y: 20 }}
+              animate={{ scale: 1, opacity: 1, y: 0 }}
+              exit={{ scale: 0.9, opacity: 0, y: 20 }}
+              className="relative w-full max-w-2xl bg-white dark:bg-slate-900 rounded-t-[3rem] sm:rounded-[3rem] shadow-2xl overflow-hidden flex flex-col max-h-[90vh]"
+            >
+              {/* Modal Header */}
+              <div className="px-6 sm:px-8 py-4 sm:py-6 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between shrink-0">
+                <div className="flex items-center gap-3 sm:gap-4">
+                  <div className={cn(
+                    "w-10 h-10 sm:w-12 sm:h-12 rounded-2xl flex items-center justify-center shrink-0",
+                    previewLostFound.type === 'lost' ? "bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400" : "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400"
+                  )}>
+                    <Package size={20} />
+                  </div>
+                  <div className="min-w-0">
+                    <h3 className="text-lg sm:text-xl font-display font-bold text-dark-surface dark:text-white leading-tight truncate max-w-[150px] sm:max-w-md">{previewLostFound.title}</h3>
+                    <p className="text-[10px] sm:text-sm text-slate-400 font-medium capitalize">{previewLostFound.type} Item • {previewLostFound.location}</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={() => setPreviewLostFound(null)}
+                  className="p-2 sm:p-3 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-2xl transition-colors text-slate-400 hover:text-dark-surface dark:hover:text-white"
+                >
+                  <X size={24} />
+                </button>
+              </div>
+
+              {/* Modal Content */}
+              <div className="flex-1 overflow-y-auto p-4 sm:p-8 space-y-6">
+                {/* Image */}
+                {previewLostFound.imageUrl ? (
+                  <div className="relative aspect-video rounded-[2rem] overflow-hidden bg-slate-100 dark:bg-slate-800 group cursor-pointer" onClick={() => setFullscreenImage(previewLostFound.imageUrl!)}>
+                    <img 
+                      src={previewLostFound.imageUrl} 
+                      alt={previewLostFound.title}
+                      className="w-full h-full object-cover"
+                      referrerPolicy="no-referrer"
+                    />
+                    <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                      <Maximize2 className="text-white" size={32} />
+                    </div>
+                  </div>
+                ) : (
+                  <div className="aspect-video rounded-[2rem] bg-slate-50 dark:bg-slate-800/50 flex flex-col items-center justify-center text-slate-300 dark:text-slate-700 space-y-4">
+                    <ImageIcon size={64} />
+                    <p className="font-medium">No image provided</p>
+                  </div>
+                )}
+
+                {/* Details */}
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-center gap-4">
+                    <div className="flex items-center gap-2 text-slate-500 bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-xl">
+                      <MapPin size={16} />
+                      <span className="text-sm font-bold">{previewLostFound.location}</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-slate-500 bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-xl">
+                      <Calendar size={16} />
+                      <span className="text-sm font-bold">{format(new Date(previewLostFound.date), 'MMMM d, yyyy')}</span>
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <h4 className="text-lg font-bold text-dark-surface dark:text-white">Description</h4>
+                    <p className="text-slate-600 dark:text-slate-400 leading-relaxed whitespace-pre-wrap">
+                      {previewLostFound.description}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Author Info */}
+                <div className="p-6 bg-slate-50 dark:bg-slate-800/50 rounded-3xl flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 bg-white dark:bg-slate-800 rounded-2xl flex items-center justify-center shadow-sm">
+                      <UserIcon size={24} className="text-slate-400" />
+                    </div>
+                    <div>
+                      <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Posted By</p>
+                      <p className="font-bold text-dark-surface dark:text-white">{previewLostFound.authorName}</p>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-xs font-bold text-slate-400 uppercase tracking-widest">Posted On</p>
+                    <p className="font-bold text-dark-surface dark:text-white">{new Date(previewLostFound.createdAt).toLocaleDateString()}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Modal Footer */}
+              {previewLostFound.authorPhone && (
+                <div className="px-8 py-6 border-t border-slate-100 dark:border-slate-800 shrink-0">
+                  <a 
+                    href={`tel:${previewLostFound.authorPhone}`}
+                    className="w-full py-5 bg-brand-600 hover:bg-brand-700 text-white rounded-2xl font-bold transition-all shadow-xl shadow-brand-200 flex items-center justify-center gap-3 text-lg"
+                  >
+                    <Phone size={24} />
+                    Contact Finder/Owner
+                  </a>
+                </div>
+              )}
             </motion.div>
           </div>
         )}
