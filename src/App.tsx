@@ -171,8 +171,8 @@ function MarketCard({ business, onClick, compact = false }: { business: Business
       </div>
 
       <div className={cn(
-        "p-4 space-y-3 flex-1 flex flex-col",
-        compact ? "p-3" : "p-5"
+        "p-3 sm:p-4 space-y-2 sm:space-y-3 flex-1 flex flex-col",
+        compact ? "p-2 sm:p-3" : "p-4 sm:p-5"
       )}>
         <div className="space-y-1">
           <h3 className={cn(
@@ -1992,7 +1992,7 @@ export default function App() {
                   </p>
                 </div>
               ) : (
-                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4 sm:gap-6 pb-8">
+                <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 sm:gap-6 pb-8">
                   {filteredDocs.map((doc) => (
                     <motion.div
                       layout
@@ -2362,7 +2362,7 @@ export default function App() {
             </div>
 
             {/* Resource List */}
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6">
               {myFilteredResources.length === 0 ? (
                 <div className="col-span-full text-center py-20 glass-panel rounded-[3rem] space-y-6">
                   <div className="w-24 h-24 bg-slate-50 dark:bg-slate-800 text-slate-300 rounded-[2rem] flex items-center justify-center mx-auto">
@@ -2431,42 +2431,46 @@ export default function App() {
                             Read
                           </button>
                         )}
-                        <button 
-                          onClick={() => {
-                            if (item.resourceType === 'document') {
-                              const doc = item as any;
-                              setEditingDoc(doc);
-                              setFormData({ title: doc.title, description: doc.description, type: doc.type, url: doc.url, category: doc.category });
-                              setRestrictToPdf(false);
-                              setIsAddModalOpen(true);
-                            } else if (item.resourceType === 'marketplace') {
-                              const biz = item as any;
-                              setEditingBusiness(biz);
-                              setBusinessFormData({ title: biz.title, description: biz.description, price: biz.price || '', category: biz.category, location: biz.location, contactPhone: biz.contactPhone });
-                              setIsBusinessModalOpen(true);
-                            } else {
-                              const lf = item as any;
-                              setEditingLostFound(lf);
-                              setLostFoundFormData({ title: lf.title, description: lf.description, type: lf.type, location: lf.location, date: lf.date });
-                              setIsLostFoundModalOpen(true);
-                            }
-                          }}
-                          className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-400 hover:text-brand-600 transition-all"
-                        >
-                          <Edit3 size={18} />
-                        </button>
-                        <button 
-                          onClick={() => {
-                            if (confirm('Are you sure you want to delete this resource?')) {
-                              if (item.resourceType === 'document') handleDeleteDocument(item.id);
-                              else if (item.resourceType === 'marketplace') handleDeleteBusiness(item.id);
-                              else handleDeleteLostFound(item.id);
-                            }
-                          }}
-                          className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-all"
-                        >
-                          <Trash2 size={18} />
-                        </button>
+                        {(!(item.resourceType === 'document' && item.status === 'approved' && !isAdmin)) && (
+                          <button 
+                            onClick={() => {
+                              if (item.resourceType === 'document') {
+                                const doc = item as any;
+                                setEditingDoc(doc);
+                                setFormData({ title: doc.title, description: doc.description, type: doc.type, url: doc.url, category: doc.category });
+                                setRestrictToPdf(false);
+                                setIsAddModalOpen(true);
+                              } else if (item.resourceType === 'marketplace') {
+                                const biz = item as any;
+                                setEditingBusiness(biz);
+                                setBusinessFormData({ title: biz.title, description: biz.description, price: biz.price || '', category: biz.category, location: biz.location, contactPhone: biz.contactPhone });
+                                setIsBusinessModalOpen(true);
+                              } else {
+                                const lf = item as any;
+                                setEditingLostFound(lf);
+                                setLostFoundFormData({ title: lf.title, description: lf.description, type: lf.type, location: lf.location, date: lf.date });
+                                setIsLostFoundModalOpen(true);
+                              }
+                            }}
+                            className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-400 hover:text-brand-600 transition-all"
+                          >
+                            <Edit3 size={18} />
+                          </button>
+                        )}
+                        {(!(item.resourceType === 'document' && item.status === 'approved' && !isAdmin)) && (
+                          <button 
+                            onClick={() => {
+                              if (confirm('Are you sure you want to delete this resource?')) {
+                                if (item.resourceType === 'document') handleDeleteDocument(item.id);
+                                else if (item.resourceType === 'marketplace') handleDeleteBusiness(item.id);
+                                else handleDeleteLostFound(item.id);
+                              }
+                            }}
+                            className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-all"
+                          >
+                            <Trash2 size={18} />
+                          </button>
+                        )}
                       </div>
                     </div>
                   </motion.div>
@@ -2751,10 +2755,10 @@ export default function App() {
                         />
                       </th>
                       <th className="px-6 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Document</th>
-                      <th className="px-6 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Author</th>
-                      <th className="px-6 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Category</th>
-                      <th className="px-6 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Status</th>
-                      <th className="px-6 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest">Date</th>
+                      <th className="px-6 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest hidden sm:table-cell">Author</th>
+                      <th className="px-6 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest hidden lg:table-cell">Category</th>
+                      <th className="px-6 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest hidden md:table-cell">Status</th>
+                      <th className="px-6 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest hidden xl:table-cell">Date</th>
                       <th className="px-6 py-5 text-[10px] font-bold text-slate-400 uppercase tracking-widest text-right">Actions</th>
                     </tr>
                   </thead>
@@ -2795,7 +2799,7 @@ export default function App() {
                             </div>
                           </div>
                         </td>
-                        <td className="px-6 py-5">
+                        <td className="px-6 py-5 hidden sm:table-cell">
                           <div className="flex items-center gap-2">
                             <div className="w-8 h-8 bg-slate-100 dark:bg-slate-800 rounded-full flex items-center justify-center text-slate-400 font-bold text-[10px]">
                               {doc.authorName[0]}
@@ -2803,12 +2807,12 @@ export default function App() {
                             <span className="text-sm font-medium text-slate-600 dark:text-slate-400">{doc.authorName}</span>
                           </div>
                         </td>
-                        <td className="px-6 py-5">
+                        <td className="px-6 py-5 hidden lg:table-cell">
                           <span className="px-3 py-1 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-full text-[10px] font-bold uppercase tracking-wider">
                             {doc.category}
                           </span>
                         </td>
-                        <td className="px-6 py-5">
+                        <td className="px-6 py-5 hidden md:table-cell">
                           <span className={cn(
                             "px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider inline-flex items-center gap-1.5",
                             doc.status === 'approved' ? "bg-emerald-100 text-emerald-600 dark:bg-emerald-900/40 dark:text-emerald-400" :
@@ -2824,7 +2828,7 @@ export default function App() {
                             {doc.status}
                           </span>
                         </td>
-                        <td className="px-6 py-5">
+                        <td className="px-6 py-5 hidden xl:table-cell">
                           <p className="text-xs text-slate-500 font-medium">{new Date(doc.createdAt).toLocaleDateString()}</p>
                         </td>
                         <td className="px-6 py-5">
@@ -3597,7 +3601,7 @@ export default function App() {
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+            <div className="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3 sm:gap-6">
               {filteredLostFoundItems.length === 0 ? (
                 <div className="col-span-full text-center py-20 glass-panel rounded-[3rem] space-y-6">
                   <div className="w-24 h-24 bg-slate-50 text-slate-300 rounded-[2rem] flex items-center justify-center mx-auto">
@@ -3612,7 +3616,7 @@ export default function App() {
                 </div>
               ) : (
                 filteredLostFoundItems.map(item => (
-                  <div key={item.id} className="glass-panel p-6 rounded-[2.5rem] space-y-4 flex flex-col">
+                  <div key={item.id} className="glass-panel p-4 sm:p-6 rounded-[2rem] sm:rounded-[2.5rem] space-y-3 sm:space-y-4 flex flex-col">
                     <div className="flex items-start justify-between">
                       <div className="flex items-center gap-4">
                         <div className={cn(
@@ -3633,11 +3637,11 @@ export default function App() {
                       </div>
                     </div>
                     {item.imageUrl && (
-                      <div className="relative aspect-video rounded-2xl overflow-hidden bg-slate-100">
+                      <div className="relative aspect-video rounded-2xl overflow-hidden bg-slate-100 cursor-pointer" onClick={() => setFullscreenImage(item.imageUrl)}>
                         <img 
                           src={item.imageUrl} 
                           alt={item.title}
-                          className="w-full h-full object-cover"
+                          className="w-full h-full object-cover transition-transform duration-500 hover:scale-110"
                           referrerPolicy="no-referrer"
                         />
                       </div>
@@ -3951,7 +3955,8 @@ export default function App() {
                           <img 
                             src={url} 
                             alt={`${previewBusiness.title} - ${idx + 1}`}
-                            className="max-w-full max-h-full object-contain"
+                            className="max-w-full max-h-full object-contain cursor-pointer"
+                            onClick={() => setFullscreenImage(url)}
                             referrerPolicy="no-referrer"
                           />
                         </div>
@@ -4590,11 +4595,15 @@ export default function App() {
       {/* Fullscreen Image Modal */}
       <AnimatePresence>
         {fullscreenImage && (
-          <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/95 backdrop-blur-2xl p-4 sm:p-10">
+          <div 
+            onClick={() => setFullscreenImage(null)}
+            className="fixed inset-0 z-[100] flex items-center justify-center bg-black/95 backdrop-blur-2xl p-4 sm:p-10 cursor-zoom-out"
+          >
             <motion.div 
               initial={{ opacity: 0, scale: 0.9 }}
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
+              onClick={(e) => e.stopPropagation()}
               className="relative w-full h-full flex items-center justify-center"
             >
               <button 

@@ -86,8 +86,8 @@ CREATE POLICY "Users can update own profile" ON profiles FOR UPDATE USING (auth.
 ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Approved documents are viewable by everyone" ON documents FOR SELECT USING (status = 'approved' OR auth.uid() = author_id);
 CREATE POLICY "Authenticated users can insert documents" ON documents FOR INSERT WITH CHECK (auth.role() = 'authenticated');
-CREATE POLICY "Users can update own documents" ON documents FOR UPDATE USING (auth.uid() = author_id OR (SELECT role FROM profiles WHERE uid = auth.uid()) = 'admin');
-CREATE POLICY "Users can delete own documents" ON documents FOR DELETE USING (auth.uid() = author_id OR (SELECT role FROM profiles WHERE uid = auth.uid()) = 'admin');
+CREATE POLICY "Users can update own documents" ON documents FOR UPDATE USING ((auth.uid() = author_id AND status != 'approved') OR (SELECT role FROM profiles WHERE uid = auth.uid()) = 'admin');
+CREATE POLICY "Users can delete own documents" ON documents FOR DELETE USING ((auth.uid() = author_id AND status != 'approved') OR (SELECT role FROM profiles WHERE uid = auth.uid()) = 'admin');
 
 -- Lost & Found
 ALTER TABLE lost_found ENABLE ROW LEVEL SECURITY;
