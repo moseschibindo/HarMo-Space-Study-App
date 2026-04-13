@@ -37,12 +37,13 @@ export interface Category {
 
 export interface Notification {
   id: string;
+  userId?: string;
   title: string;
   message: string;
   type: 'info' | 'warning' | 'success';
   createdAt: string;
   active: boolean;
-  read?: boolean;
+  read: boolean;
   showOnHome?: boolean;
 }
 

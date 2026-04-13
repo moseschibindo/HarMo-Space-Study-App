@@ -137,7 +137,7 @@ function MarketCard({ business, onClick, compact = false }: { business: Business
         "relative bg-slate-100 dark:bg-slate-800 overflow-hidden",
         compact ? "aspect-square" : "aspect-[4/3]"
       )}>
-        {business.imageUrls.length > 0 ? (
+        {business.imageUrls?.length > 0 ? (
           <img 
             src={business.imageUrls[0]} 
             alt={business.title}
@@ -210,6 +210,84 @@ function MarketCard({ business, onClick, compact = false }: { business: Business
   );
 }
 
+const ConfirmationModal = ({ 
+  isOpen, 
+  onClose, 
+  onConfirm, 
+  title, 
+  message, 
+  type = 'danger' 
+}: { 
+  isOpen: boolean, 
+  onClose: () => void, 
+  onConfirm: () => void, 
+  title: string, 
+  message: string,
+  type?: 'danger' | 'warning' | 'info'
+}) => {
+  if (!isOpen) return null;
+
+  return (
+    <AnimatePresence>
+      <motion.div 
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        exit={{ opacity: 0 }}
+        className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm"
+        onClick={onClose}
+      >
+        <motion.div 
+          initial={{ scale: 0.9, opacity: 0, y: 20 }}
+          animate={{ scale: 1, opacity: 1, y: 0 }}
+          exit={{ scale: 0.9, opacity: 0, y: 20 }}
+          className="bg-white dark:bg-slate-900 rounded-[2.5rem] p-8 max-w-md w-full shadow-2xl space-y-6"
+          onClick={e => e.stopPropagation()}
+        >
+          <div className="flex items-center gap-4">
+            <div className={cn(
+              "w-14 h-14 rounded-2xl flex items-center justify-center",
+              type === 'danger' ? "bg-red-50 text-red-600" :
+              type === 'warning' ? "bg-amber-50 text-amber-600" :
+              "bg-brand-50 text-brand-600"
+            )}>
+              {type === 'danger' ? <Trash2 size={28} /> :
+               type === 'warning' ? <AlertTriangle size={28} /> :
+               <Info size={28} />}
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-xl font-display font-bold text-dark-surface dark:text-white">{title}</h3>
+              <p className="text-sm text-slate-500 font-medium">{message}</p>
+            </div>
+          </div>
+
+          <div className="flex gap-3 pt-2">
+            <button 
+              onClick={onClose}
+              className="flex-1 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 rounded-2xl font-bold hover:bg-slate-200 transition-all"
+            >
+              Cancel
+            </button>
+            <button 
+              onClick={() => {
+                onConfirm();
+                onClose();
+              }}
+              className={cn(
+                "flex-1 py-4 rounded-2xl font-bold text-white shadow-lg transition-all hover:scale-[1.02]",
+                type === 'danger' ? "bg-red-600 shadow-red-200" :
+                type === 'warning' ? "bg-amber-600 shadow-amber-200" :
+                "bg-brand-600 shadow-brand-200"
+              )}
+            >
+              Confirm
+            </button>
+          </div>
+        </motion.div>
+      </motion.div>
+    </AnimatePresence>
+  );
+};
+
 export default function App() {
   const { user, profile, isAdmin, loading: authLoading, signIn, signUp, signOut, updateProfile } = useAuth();
   const [activeTab, setActiveTab] = useState<'home' | 'marketplace' | 'profile' | 'admin' | 'lostfound' | 'notifications' | 'users' | 'manage-docs' | 'manage-notifications' | 'manage-lostfound' | 'manage-marketplace' | 'my-resources'>('home');
@@ -226,6 +304,42 @@ export default function App() {
 
   const [documents, setDocuments] = useState<StudyDocument[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [searchHistory, setSearchHistory] = useState<string[]>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('searchHistory');
+      return saved ? JSON.parse(saved) : [];
+    }
+    return [];
+  });
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('searchHistory', JSON.stringify(searchHistory));
+    }
+  }, [searchHistory]);
+
+  useEffect(() => {
+    if (!searchQuery.trim()) return;
+    
+    const timer = setTimeout(() => {
+      setSearchHistory(prev => {
+        const trimmed = searchQuery.trim();
+        if (prev[0] === trimmed) return prev;
+        const newHistory = [trimmed, ...prev.filter(q => q !== trimmed)].slice(0, 5);
+        return newHistory;
+      });
+    }, 2000);
+
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  const getDynamicPlaceholder = () => {
+    if (searchHistory.length > 0) {
+      return `Search materials eg ${searchHistory[0]}...`;
+    }
+    return "Search materials eg AGED...";
+  };
+
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     if (typeof window !== 'undefined') {
@@ -289,6 +403,19 @@ export default function App() {
   const [showSplash, setShowSplash] = useState(true);
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
   const avatarInputRef = React.useRef<HTMLInputElement>(null);
+  const [confirmModal, setConfirmModal] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+    type?: 'danger' | 'warning' | 'info';
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    onConfirm: () => {},
+    type: 'danger'
+  });
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -322,7 +449,8 @@ export default function App() {
     message: '',
     type: 'info' as 'info' | 'warning' | 'success',
     active: true,
-    showOnHome: false
+    showOnHome: false,
+    userId: '' as string | undefined
   });
 
   const [lostFoundItems, setLostFoundItems] = useState<LostFoundItem[]>([]);
@@ -444,14 +572,33 @@ export default function App() {
 
   const fetchNotifications = async () => {
     try {
-      const { data, error } = await supabase
+      let query = supabase
         .from('notifications')
         .select('*')
         .order('created_at', { ascending: false });
-      if (error) throw error;
-      if (data && data.length > 0) {
-        setNotifications(data);
+      
+      if (profile?.uid) {
+        query = query.or(`user_id.eq.${profile.uid},user_id.is.null`);
+      } else {
+        query = query.is('user_id', null);
       }
+
+      const { data, error } = await query;
+      if (error) throw error;
+      
+      const mappedData = (data || []).map(n => ({
+        id: n.id,
+        userId: n.user_id,
+        title: n.title,
+        message: n.message,
+        type: n.type,
+        createdAt: n.created_at,
+        active: n.active,
+        read: n.read,
+        showOnHome: n.show_on_home
+      }));
+      
+      setNotifications(mappedData);
     } catch (err) {
       console.error('Error fetching notifications:', err);
     }
@@ -464,7 +611,20 @@ export default function App() {
         .select('*')
         .order('created_at', { ascending: false });
       if (error) throw error;
-      setUsers(data || []);
+      
+      const mappedUsers = (data || []).map(u => ({
+        uid: u.id,
+        email: u.email,
+        displayName: u.display_name,
+        phoneNumber: u.phone_number,
+        avatarUrl: u.avatar_url,
+        role: u.role,
+        status: u.status,
+        createdAt: u.created_at,
+        pinnedDocIds: u.pinned_doc_ids || []
+      }));
+      
+      setUsers(mappedUsers);
     } catch (err) {
       console.error('Error fetching users:', err);
     }
@@ -603,7 +763,7 @@ export default function App() {
     e.preventDefault();
     if (!user) return;
     if (selectedFiles.length === 0 && !editingDoc) {
-      alert('Please select at least one file to upload');
+      toast.error('Please select at least one file to upload');
       return;
     }
 
@@ -714,8 +874,10 @@ export default function App() {
       } else {
         if (successCount === totalFiles) {
           toast.success(`Successfully uploaded all ${totalFiles} document(s)`);
+          notifyAdmins('New Document Submission', `${profile?.displayName || 'A user'} has uploaded ${totalFiles} new document(s) for approval.`);
         } else if (successCount > 0) {
           toast.success(`Uploaded ${successCount} of ${totalFiles} document(s)`);
+          notifyAdmins('New Document Submission', `${profile?.displayName || 'A user'} has uploaded ${successCount} new document(s) for approval.`);
         } else {
           toast.error('Failed to upload any documents');
         }
@@ -735,11 +897,17 @@ export default function App() {
         .delete()
         .eq('id', id);
       if (error) throw error;
+      
+      // Update local state immediately
       setDocuments(prev => prev.filter(d => d.id !== id));
+      
+      // Also re-fetch to be absolutely sure
+      fetchDocuments();
+      
       toast.success('Document deleted');
     } catch (err: any) {
       console.error('Error deleting document:', err);
-      toast.error('Failed to delete document');
+      toast.error(`Failed to delete document: ${err.message || 'Unknown error'}`);
     }
   };
 
@@ -755,19 +923,22 @@ export default function App() {
       
       if (doc) {
         await supabase.from('notifications').insert([{
+          user_id: doc.authorId,
           title: `Document ${status === 'approved' ? 'Approved' : 'Rejected'}`,
           message: `Your document "${doc.title}" has been ${status}.`,
           type: status === 'approved' ? 'success' : 'warning',
           active: true,
-          showOnHome: false,
+          show_on_home: false,
           read: false,
           created_at: new Date().toISOString()
         }]);
       }
       
       fetchDocuments();
-    } catch (err) {
+      toast.success(`Document ${status}`);
+    } catch (err: any) {
       console.error('Error approving/rejecting document:', err);
+      toast.error(`Failed to update document: ${err.message}`);
       setDocuments(documents.map(doc => doc.id === id ? { ...doc, status } : doc));
     }
   };
@@ -775,15 +946,36 @@ export default function App() {
   const handleBulkApprove = async (status: 'approved' | 'rejected') => {
     if (!isAdmin || selectedDocIds.length === 0) return;
     try {
+      const docsToNotify = documents.filter(d => selectedDocIds.includes(d.id));
+      
       const { error } = await supabase
         .from('documents')
         .update({ status })
         .in('id', selectedDocIds);
       if (error) throw error;
+
+      // Send notifications to each author
+      const notificationsToInsert = docsToNotify.map(doc => ({
+        user_id: doc.authorId,
+        title: `Document ${status === 'approved' ? 'Approved' : 'Rejected'}`,
+        message: `Your document "${doc.title}" has been ${status} in bulk action.`,
+        type: status === 'approved' ? 'success' : 'warning',
+        active: true,
+        show_on_home: false,
+        read: false,
+        created_at: new Date().toISOString()
+      }));
+
+      if (notificationsToInsert.length > 0) {
+        await supabase.from('notifications').insert(notificationsToInsert);
+      }
+
       fetchDocuments();
       setSelectedDocIds([]);
-    } catch (err) {
+      toast.success(`${selectedDocIds.length} documents ${status}`);
+    } catch (err: any) {
       console.error('Error bulk approving/rejecting documents:', err);
+      toast.error(`Failed to bulk update documents: ${err.message}`);
       setDocuments(documents.map(doc => selectedDocIds.includes(doc.id) ? { ...doc, status } : doc));
       setSelectedDocIds([]);
     }
@@ -791,31 +983,49 @@ export default function App() {
 
   const handleBulkDelete = async () => {
     if (!isAdmin || selectedDocIds.length === 0) return;
-    if (!window.confirm(`Are you sure you want to delete ${selectedDocIds.length} documents?`)) return;
     
-    try {
-      const { error } = await supabase
-        .from('documents')
-        .delete()
-        .in('id', selectedDocIds);
-      if (error) throw error;
-      fetchDocuments();
-      setSelectedDocIds([]);
-    } catch (err) {
-      console.error('Error bulk deleting documents:', err);
-      setDocuments(documents.filter(doc => !selectedDocIds.includes(doc.id)));
-      setSelectedDocIds([]);
-    }
+    setConfirmModal({
+      isOpen: true,
+      title: 'Bulk Delete',
+      message: `Are you sure you want to delete ${selectedDocIds.length} documents? This action cannot be undone.`,
+      onConfirm: async () => {
+        try {
+          const { error } = await supabase
+            .from('documents')
+            .delete()
+            .in('id', selectedDocIds);
+          if (error) throw error;
+          fetchDocuments();
+          setSelectedDocIds([]);
+          toast.success(`${selectedDocIds.length} documents deleted`);
+        } catch (err: any) {
+          console.error('Error bulk deleting documents:', err);
+          toast.error(`Failed to bulk delete: ${err.message}`);
+          setDocuments(documents.filter(doc => !selectedDocIds.includes(doc.id)));
+          setSelectedDocIds([]);
+        }
+      },
+      type: 'danger'
+    });
   };
 
   const handleAddNotification = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
+      const dbData = {
+        title: notificationFormData.title,
+        message: notificationFormData.message,
+        type: notificationFormData.type,
+        active: notificationFormData.active,
+        show_on_home: notificationFormData.showOnHome,
+        user_id: notificationFormData.userId || null
+      };
+
       if (editingNotification) {
         const { error } = await supabase
           .from('notifications')
           .update({
-            ...notificationFormData,
+            ...dbData,
             updated_at: new Date().toISOString()
           })
           .eq('id', editingNotification.id);
@@ -825,7 +1035,7 @@ export default function App() {
         const { error } = await supabase
           .from('notifications')
           .insert([{
-            ...notificationFormData,
+            ...dbData,
             created_at: new Date().toISOString(),
             read: false
           }]);
@@ -834,10 +1044,40 @@ export default function App() {
       }
       setIsNotificationModalOpen(false);
       setEditingNotification(null);
+      setNotificationFormData({
+        title: '',
+        message: '',
+        type: 'info',
+        active: true,
+        showOnHome: false,
+        userId: ''
+      });
       fetchNotifications();
     } catch (err: any) {
       console.error('Error saving notification:', err);
       toast.error(`Error: ${err.message}`);
+    }
+  };
+
+  const notifyAdmins = async (title: string, message: string) => {
+    try {
+      const admins = users.filter(u => u.role === 'admin');
+      if (admins.length === 0) return;
+
+      const notificationsToInsert = admins.map(admin => ({
+        user_id: admin.uid,
+        title,
+        message,
+        type: 'info' as const,
+        active: true,
+        show_on_home: false,
+        read: false,
+        created_at: new Date().toISOString()
+      }));
+
+      await supabase.from('notifications').insert(notificationsToInsert);
+    } catch (err) {
+      console.error('Error notifying admins:', err);
     }
   };
 
@@ -863,7 +1103,9 @@ export default function App() {
       const { error } = await supabase
         .from('notifications')
         .update({ read: true })
-        .in('id', unreadIds);
+        .in('id', unreadIds)
+        .or(`user_id.eq.${profile?.uid},user_id.is.null`);
+      
       if (error) throw error;
       setNotifications(prev => prev.map(n => ({ ...n, read: true })));
       toast.success('All notifications marked as read');
@@ -878,12 +1120,12 @@ export default function App() {
       const readIds = notifications.filter(n => n.read).map(n => n.id);
       if (readIds.length === 0) return;
 
-      if (!confirm(`Are you sure you want to clear ${readIds.length} read notifications?`)) return;
-
       const { error } = await supabase
         .from('notifications')
         .delete()
-        .in('id', readIds);
+        .in('id', readIds)
+        .eq('user_id', profile?.uid);
+      
       if (error) throw error;
       setNotifications(prev => prev.filter(n => !n.read));
       toast.success('Read notifications cleared');
@@ -893,29 +1135,81 @@ export default function App() {
     }
   };
 
-  const handleSuspendUser = (userId: string) => {
-    setUsers(users.map(u => {
-      if (u.uid === userId) {
-        const newStatus = u.status === 'active' ? 'suspended' : 'active';
-        return { ...u, status: newStatus, role: newStatus === 'suspended' ? 'suspended' : 'student' };
-      }
-      return u;
-    }));
-  };
+  const handleSuspendUser = async (userId: string) => {
+    try {
+      const userToUpdate = users.find(u => u.uid === userId);
+      if (!userToUpdate) return;
 
-  const handleDeleteUser = (userId: string) => {
-    if (window.confirm('Are you sure you want to delete this user account? This action cannot be undone.')) {
-      setUsers(users.filter(u => u.uid !== userId));
+      const newStatus = userToUpdate.status === 'active' ? 'suspended' : 'active';
+      const newRole = newStatus === 'suspended' ? 'suspended' : 'student';
+
+      const { error } = await supabase
+        .from('profiles')
+        .update({ status: newStatus, role: newRole })
+        .eq('id', userId);
+
+      if (error) throw error;
+
+      setUsers(users.map(u => {
+        if (u.uid === userId) {
+          return { ...u, status: newStatus, role: newRole };
+        }
+        return u;
+      }));
+      toast.success(`User ${newStatus === 'suspended' ? 'suspended' : 'activated'}`);
+    } catch (err: any) {
+      console.error('Error suspending user:', err);
+      toast.error(`Failed to update user: ${err.message}`);
     }
   };
 
-  const handlePromoteUser = (userId: string) => {
-    setUsers(users.map(u => {
-      if (u.uid === userId) {
-        return { ...u, role: u.role === 'admin' ? 'student' : 'admin' };
-      }
-      return u;
-    }));
+  const handleDeleteUser = async (userId: string) => {
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .delete()
+        .eq('id', userId);
+
+      if (error) throw error;
+
+      // Update local state immediately
+      setUsers(users.filter(u => u.uid !== userId));
+      
+      // Also re-fetch to be absolutely sure
+      fetchUsers();
+      
+      toast.success('User deleted successfully');
+    } catch (err: any) {
+      console.error('Error deleting user:', err);
+      toast.error(`Failed to delete user: ${err.message || 'Unknown error'}`);
+    }
+  };
+
+  const handlePromoteUser = async (userId: string) => {
+    try {
+      const userToUpdate = users.find(u => u.uid === userId);
+      if (!userToUpdate) return;
+
+      const newRole = userToUpdate.role === 'admin' ? 'student' : 'admin';
+
+      const { error } = await supabase
+        .from('profiles')
+        .update({ role: newRole })
+        .eq('id', userId);
+
+      if (error) throw error;
+
+      setUsers(users.map(u => {
+        if (u.uid === userId) {
+          return { ...u, role: newRole };
+        }
+        return u;
+      }));
+      toast.success(`User ${newRole === 'admin' ? 'promoted to admin' : 'demoted to student'}`);
+    } catch (err: any) {
+      console.error('Error promoting user:', err);
+      toast.error(`Failed to update user role: ${err.message}`);
+    }
   };
 
   const handleAddLostFound = async (e: React.FormEvent) => {
@@ -960,6 +1254,7 @@ export default function App() {
           .update(itemData)
           .eq('id', editingLostFound.id);
         if (error) throw error;
+        toast.success('Item updated');
       } else {
         const { error } = await supabase
           .from('lost_found')
@@ -971,6 +1266,8 @@ export default function App() {
             created_at: new Date().toISOString()
           }]);
         if (error) throw error;
+        toast.success('Item submitted for approval');
+        notifyAdmins('New Lost & Found Item', `${profile?.displayName || 'A user'} has posted a new ${lostFoundFormData.type} item: "${lostFoundFormData.title}".`);
       }
 
       setIsLostFoundModalOpen(false);
@@ -997,35 +1294,56 @@ export default function App() {
   };
 
   const handleDeleteNotification = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this notification?')) return;
     try {
       const { error } = await supabase.from('notifications').delete().eq('id', id);
       if (error) throw error;
+      
+      // Update local state immediately
       setNotifications(prev => prev.filter(n => n.id !== id));
-    } catch (err) {
+      
+      // Also re-fetch to be absolutely sure
+      fetchNotifications();
+      
+      toast.success('Notification deleted');
+    } catch (err: any) {
       console.error('Error deleting notification:', err);
+      toast.error(`Failed to delete notification: ${err.message || 'Unknown error'}`);
     }
   };
 
   const handleDeleteLostFound = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this item?')) return;
     try {
       const { error } = await supabase.from('lost_found').delete().eq('id', id);
       if (error) throw error;
+      
+      // Update local state immediately
       setLostFoundItems(prev => prev.filter(i => i.id !== id));
-    } catch (err) {
+      
+      // Also re-fetch to be absolutely sure
+      fetchLostFound();
+      
+      toast.success('Item deleted successfully');
+    } catch (err: any) {
       console.error('Error deleting item:', err);
+      toast.error(`Failed to delete item: ${err.message || 'Unknown error'}`);
     }
   };
 
   const handleDeleteBusiness = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this listing?')) return;
     try {
       const { error } = await supabase.from('businesses').delete().eq('id', id);
       if (error) throw error;
+      
+      // Update local state immediately
       setBusinessListings(prev => prev.filter(b => b.id !== id));
-    } catch (err) {
+      
+      // Also re-fetch to be absolutely sure
+      fetchBusinessListings();
+      
+      toast.success('Listing deleted successfully');
+    } catch (err: any) {
       console.error('Error deleting listing:', err);
+      toast.error(`Failed to delete listing: ${err.message || 'Unknown error'}`);
     }
   };
 
@@ -1041,19 +1359,22 @@ export default function App() {
 
       if (item) {
         await supabase.from('notifications').insert([{
+          user_id: item.authorId,
           title: `Lost & Found Item ${status === 'approved' ? 'Approved' : 'Rejected'}`,
           message: `Your item "${item.title}" has been ${status}.`,
           type: status === 'approved' ? 'success' : 'warning',
           active: true,
-          showOnHome: false,
+          show_on_home: false,
           read: false,
           created_at: new Date().toISOString()
         }]);
       }
 
       fetchLostFound();
-    } catch (err) {
+      toast.success(`Item ${status}`);
+    } catch (err: any) {
       console.error('Error approving/rejecting item:', err);
+      toast.error(`Failed to update item: ${err.message}`);
       setLostFoundItems(lostFoundItems.map(item => item.id === id ? { ...item, status } : item));
     }
   };
@@ -1125,6 +1446,7 @@ export default function App() {
           .update(businessData)
           .eq('id', editingBusiness.id);
         if (error) throw error;
+        toast.success('Listing updated');
       } else {
         const { error } = await supabase
           .from('businesses')
@@ -1136,6 +1458,8 @@ export default function App() {
             viewed_by: []
           }]);
         if (error) throw error;
+        toast.success('Listing submitted for approval');
+        notifyAdmins('New Marketplace Listing', `${profile?.displayName || 'A user'} has posted a new listing: "${businessFormData.title}".`);
       }
 
       setIsBusinessModalOpen(false);
@@ -1174,19 +1498,22 @@ export default function App() {
 
       if (business) {
         await supabase.from('notifications').insert([{
-          title: `Business Listing ${status === 'approved' ? 'Approved' : 'Rejected'}`,
+          user_id: business.authorId,
+          title: `Marketplace Listing ${status === 'approved' ? 'Approved' : 'Rejected'}`,
           message: `Your listing "${business.title}" has been ${status}.`,
           type: status === 'approved' ? 'success' : 'warning',
           active: true,
-          showOnHome: false,
+          show_on_home: false,
           read: false,
           created_at: new Date().toISOString()
         }]);
       }
 
       fetchBusinessListings();
-    } catch (err) {
+      toast.success(`Listing ${status}`);
+    } catch (err: any) {
       console.error('Error updating business status:', err);
+      toast.error(`Failed to update listing: ${err.message}`);
     }
   };
 
@@ -1201,7 +1528,7 @@ export default function App() {
       const { error } = await supabase
         .from('profiles')
         .update({ pinned_doc_ids: newPinnedIds })
-        .eq('uid', profile.uid);
+        .eq('id', profile.uid);
       
       if (error) throw error;
       updateProfile({ pinnedDocIds: newPinnedIds });
@@ -1245,7 +1572,7 @@ export default function App() {
       const { error: updateError } = await supabase
         .from('profiles')
         .update({ avatar_url: publicUrl })
-        .eq('uid', user.id);
+        .eq('id', user.id);
 
       if (updateError) throw updateError;
 
@@ -1340,7 +1667,6 @@ export default function App() {
 
   const handleDelete = async (id: string) => {
     if (!isAdmin) return;
-    if (!confirm('Are you sure you want to delete this document?')) return;
 
     try {
       const { error } = await supabase
@@ -1349,9 +1675,11 @@ export default function App() {
         .eq('id', id);
       if (error) throw error;
       fetchDocuments();
+      toast.success('Document deleted');
     } catch (err) {
       console.error('Error deleting document:', err);
       setDocuments(documents.filter(d => d.id !== id));
+      toast.error('Failed to delete document');
     }
   };
 
@@ -1746,11 +2074,17 @@ export default function App() {
                 <div className="pt-4 border-t border-slate-100 dark:border-slate-800">
                   <button 
                     onClick={() => {
-                      if (confirm('This will clear your local session and reload the app. Use this if you are experiencing login errors. Continue?')) {
-                        localStorage.clear();
-                        sessionStorage.clear();
-                        window.location.reload();
-                      }
+                      setConfirmModal({
+                        isOpen: true,
+                        title: 'Reset Session',
+                        message: 'This will clear your local session and reload the app. Use this if you are experiencing login errors. Continue?',
+                        onConfirm: () => {
+                          localStorage.clear();
+                          sessionStorage.clear();
+                          window.location.reload();
+                        },
+                        type: 'warning'
+                      });
                     }}
                     className="text-[10px] font-bold text-slate-400 hover:text-red-500 uppercase tracking-widest transition-colors"
                   >
@@ -1910,7 +2244,7 @@ export default function App() {
                 <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-dark-surface dark:group-focus-within:text-white transition-colors" size={20} />
                 <input 
                   type="text"
-                  placeholder="Search materials..."
+                  placeholder={getDynamicPlaceholder()}
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="w-full pl-14 pr-6 py-5 bg-white dark:bg-slate-900 border-none rounded-[2rem] focus:outline-none focus:ring-4 focus:ring-dark-surface/5 dark:focus:ring-white/5 transition-all shadow-[0_4px_20px_rgba(0,0,0,0.03)] text-lg text-dark-surface dark:text-white"
@@ -1938,150 +2272,156 @@ export default function App() {
             </div>
 
             {/* Recently Viewed */}
-            <div className="space-y-6">
-              <div className="px-4 sm:px-6 flex items-center justify-between">
-                <h3 className="text-xl sm:text-2xl font-display font-bold text-dark-surface dark:text-white tracking-tight">Recently viewed</h3>
-                <button className="text-sm font-bold text-slate-400 hover:text-dark-surface dark:hover:text-white transition-colors">See all</button>
+            {searchQuery === '' && (
+              <div className="space-y-6">
+                <div className="px-4 sm:px-6 flex items-center justify-between">
+                  <h3 className="text-xl sm:text-2xl font-display font-bold text-dark-surface dark:text-white tracking-tight">Recently viewed</h3>
+                  <button className="text-sm font-bold text-slate-400 hover:text-dark-surface dark:hover:text-white transition-colors">See all</button>
+                </div>
+                
+                <div className="flex gap-5 overflow-x-auto px-4 sm:px-6 pb-4 scrollbar-hide">
+                  {recentlyViewed.map((doc) => (
+                      <motion.div
+                        key={`recent-${doc.id}`}
+                        whileHover={{ y: -5 }}
+                        onClick={() => {
+                          setReadingDoc(doc);
+                          incrementViews(doc.id);
+                        }}
+                        className="w-64 sm:w-72 shrink-0 glass-panel p-4 rounded-[2.5rem] space-y-4 group cursor-pointer"
+                      >
+                        <div className="aspect-square rounded-[2rem] overflow-hidden relative">
+                          <img 
+                            src={`https://picsum.photos/seed/recent-${doc.id}/400/400`} 
+                            alt={doc.title}
+                            referrerPolicy="no-referrer"
+                            className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
+                          />
+                          <div className="absolute top-3 right-3 flex flex-col gap-2">
+                            <div className="px-3 py-1 bg-white/90 dark:bg-slate-900/90 backdrop-blur-sm rounded-full text-[10px] font-bold uppercase tracking-wider text-dark-surface dark:text-white">
+                              {doc.type}
+                            </div>
+                            <div className="px-3 py-1 bg-brand-600/90 backdrop-blur-sm rounded-full text-[10px] font-bold text-white flex items-center gap-1">
+                              <Eye size={10} />
+                              {doc.views || 0}
+                            </div>
+                          </div>
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleTogglePin(doc.id);
+                            }}
+                            className={cn(
+                              "absolute bottom-3 right-3 p-2 rounded-xl transition-all shadow-lg",
+                              profile?.pinnedDocIds?.includes(doc.id) 
+                                ? "bg-brand-600 text-white" 
+                                : "bg-white/90 text-slate-400 hover:text-brand-600"
+                            )}
+                          >
+                            <Bookmark size={16} fill={profile?.pinnedDocIds?.includes(doc.id) ? "currentColor" : "none"} />
+                          </button>
+                        </div>
+                        <div className="space-y-1 px-1">
+                          <div className="flex items-center justify-between gap-2">
+                            <h4 className="font-bold text-dark-surface dark:text-white truncate flex-1">{doc.title}</h4>
+                            <button 
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setReadingDoc(doc);
+                                incrementViews(doc.id);
+                              }}
+                              className="px-3 py-1 bg-brand-50 text-brand-600 rounded-lg text-[10px] font-bold hover:bg-brand-600 hover:text-white transition-all"
+                            >
+                              Read
+                            </button>
+                          </div>
+                          <p className="text-xs text-slate-400 font-medium">{doc.category}</p>
+                        </div>
+                      </motion.div>
+                  ))}
+                </div>
               </div>
-              
-              <div className="flex gap-5 overflow-x-auto px-4 sm:px-6 pb-4 scrollbar-hide">
-                {recentlyViewed.map((doc) => (
-                    <motion.div
-                      key={`recent-${doc.id}`}
-                      whileHover={{ y: -5 }}
-                      onClick={() => {
-                        setReadingDoc(doc);
-                        incrementViews(doc.id);
-                      }}
-                      className="w-64 sm:w-72 shrink-0 glass-panel p-4 rounded-[2.5rem] space-y-4 group cursor-pointer"
-                    >
-                      <div className="aspect-square rounded-[2rem] overflow-hidden relative">
+            )}
+
+            {/* Trending Materials */}
+            {searchQuery === '' && (
+              <div className="space-y-6 mt-12">
+                <div className="px-4 sm:px-6 flex items-center justify-between">
+                  <h3 className="text-xl sm:text-2xl font-display font-bold text-dark-surface dark:text-white tracking-tight">Trending materials</h3>
+                  <button className="text-sm font-bold text-slate-400 hover:text-dark-surface dark:hover:text-white transition-colors">See all</button>
+                </div>
+                
+                <div className="flex gap-5 overflow-x-auto px-4 sm:px-6 pb-4 scrollbar-hide">
+                  {trendingMaterials.map((doc) => (
+                      <motion.div
+                        key={`trending-${doc.id}`}
+                        whileHover={{ y: -5 }}
+                        onClick={() => {
+                          setReadingDoc(doc);
+                          incrementViews(doc.id);
+                        }}
+                        className="w-72 sm:w-80 shrink-0 featured-card aspect-[16/10] relative overflow-hidden rounded-[2.5rem] cursor-pointer"
+                      >
                         <img 
-                          src={`https://picsum.photos/seed/recent-${doc.id}/400/400`} 
+                          src={`https://picsum.photos/seed/trending-${doc.id}/600/400`} 
                           alt={doc.title}
                           referrerPolicy="no-referrer"
-                          className="w-full h-full object-cover group-hover:scale-110 transition-transform duration-500"
+                          className="absolute inset-0 w-full h-full object-cover"
                         />
-                        <div className="absolute top-3 right-3 flex flex-col gap-2">
-                          <div className="px-3 py-1 bg-white/90 dark:bg-slate-900/90 backdrop-blur-sm rounded-full text-[10px] font-bold uppercase tracking-wider text-dark-surface dark:text-white">
-                            {doc.type}
-                          </div>
-                          <div className="px-3 py-1 bg-brand-600/90 backdrop-blur-sm rounded-full text-[10px] font-bold text-white flex items-center gap-1">
+                        <div className="absolute inset-0 bg-gradient-to-t from-brand-900/90 via-brand-900/20 to-transparent"></div>
+                        <div className="absolute top-4 right-4 flex flex-col gap-2">
+                          <div className="px-3 py-1 bg-white/20 backdrop-blur-md rounded-full text-[10px] font-bold text-white flex items-center gap-1">
                             <Eye size={10} />
                             {doc.views || 0}
                           </div>
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleTogglePin(doc.id);
+                            }}
+                            className={cn(
+                              "p-2 rounded-xl transition-all shadow-lg",
+                              profile?.pinnedDocIds?.includes(doc.id) 
+                                ? "bg-brand-600 text-white" 
+                                : "bg-white/20 text-white/70 hover:text-white"
+                            )}
+                          >
+                            <Bookmark size={16} fill={profile?.pinnedDocIds?.includes(doc.id) ? "currentColor" : "none"} />
+                          </button>
                         </div>
-                        <button 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleTogglePin(doc.id);
-                          }}
-                          className={cn(
-                            "absolute bottom-3 right-3 p-2 rounded-xl transition-all shadow-lg",
-                            profile?.pinnedDocIds?.includes(doc.id) 
-                              ? "bg-brand-600 text-white" 
-                              : "bg-white/90 text-slate-400 hover:text-brand-600"
-                          )}
-                        >
-                          <Bookmark size={16} fill={profile?.pinnedDocIds?.includes(doc.id) ? "currentColor" : "none"} />
-                        </button>
-                      </div>
-                      <div className="space-y-1 px-1">
-                        <div className="flex items-center justify-between gap-2">
-                          <h4 className="font-bold text-dark-surface dark:text-white truncate flex-1">{doc.title}</h4>
+                        <div className="absolute bottom-6 left-6 right-6 flex items-end justify-between gap-4">
+                          <div className="min-w-0">
+                            <h4 className="text-lg font-display font-bold text-white truncate">{doc.title}</h4>
+                            <div className="flex items-center gap-2 text-white/70 text-[10px] font-bold uppercase tracking-widest">
+                              <span>{doc.category}</span>
+                              <span>•</span>
+                              <span>{doc.type}</span>
+                            </div>
+                          </div>
                           <button 
                             onClick={(e) => {
                               e.stopPropagation();
                               setReadingDoc(doc);
                               incrementViews(doc.id);
                             }}
-                            className="px-3 py-1 bg-brand-50 text-brand-600 rounded-lg text-[10px] font-bold hover:bg-brand-600 hover:text-white transition-all"
+                            className="px-4 py-2 bg-white text-brand-600 rounded-xl text-[10px] font-bold hover:bg-brand-600 hover:text-white transition-all shadow-lg shrink-0"
                           >
-                            Read
+                            Read Now
                           </button>
                         </div>
-                        <p className="text-xs text-slate-400 font-medium">{doc.category}</p>
-                      </div>
-                    </motion.div>
-                ))}
+                      </motion.div>
+                  ))}
+                </div>
               </div>
-            </div>
-
-            {/* Trending Materials */}
-            <div className="space-y-6 mt-12">
-              <div className="px-4 sm:px-6 flex items-center justify-between">
-                <h3 className="text-xl sm:text-2xl font-display font-bold text-dark-surface dark:text-white tracking-tight">Trending materials</h3>
-                <button className="text-sm font-bold text-slate-400 hover:text-dark-surface dark:hover:text-white transition-colors">See all</button>
-              </div>
-              
-              <div className="flex gap-5 overflow-x-auto px-4 sm:px-6 pb-4 scrollbar-hide">
-                {trendingMaterials.map((doc) => (
-                    <motion.div
-                      key={`trending-${doc.id}`}
-                      whileHover={{ y: -5 }}
-                      onClick={() => {
-                        setReadingDoc(doc);
-                        incrementViews(doc.id);
-                      }}
-                      className="w-72 sm:w-80 shrink-0 featured-card aspect-[16/10] relative overflow-hidden rounded-[2.5rem] cursor-pointer"
-                    >
-                      <img 
-                        src={`https://picsum.photos/seed/trending-${doc.id}/600/400`} 
-                        alt={doc.title}
-                        referrerPolicy="no-referrer"
-                        className="absolute inset-0 w-full h-full object-cover"
-                      />
-                      <div className="absolute inset-0 bg-gradient-to-t from-brand-900/90 via-brand-900/20 to-transparent"></div>
-                      <div className="absolute top-4 right-4 flex flex-col gap-2">
-                        <div className="px-3 py-1 bg-white/20 backdrop-blur-md rounded-full text-[10px] font-bold text-white flex items-center gap-1">
-                          <Eye size={10} />
-                          {doc.views || 0}
-                        </div>
-                        <button 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            handleTogglePin(doc.id);
-                          }}
-                          className={cn(
-                            "p-2 rounded-xl transition-all shadow-lg",
-                            profile?.pinnedDocIds?.includes(doc.id) 
-                              ? "bg-brand-600 text-white" 
-                              : "bg-white/20 text-white/70 hover:text-white"
-                          )}
-                        >
-                          <Bookmark size={16} fill={profile?.pinnedDocIds?.includes(doc.id) ? "currentColor" : "none"} />
-                        </button>
-                      </div>
-                      <div className="absolute bottom-6 left-6 right-6 flex items-end justify-between gap-4">
-                        <div className="min-w-0">
-                          <h4 className="text-lg font-display font-bold text-white truncate">{doc.title}</h4>
-                          <div className="flex items-center gap-2 text-white/70 text-[10px] font-bold uppercase tracking-widest">
-                            <span>{doc.category}</span>
-                            <span>•</span>
-                            <span>{doc.type}</span>
-                          </div>
-                        </div>
-                        <button 
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setReadingDoc(doc);
-                            incrementViews(doc.id);
-                          }}
-                          className="px-4 py-2 bg-white text-brand-600 rounded-xl text-[10px] font-bold hover:bg-brand-600 hover:text-white transition-all shadow-lg shrink-0"
-                        >
-                          Read Now
-                        </button>
-                      </div>
-                    </motion.div>
-                ))}
-              </div>
-            </div>
+            )}
 
             {/* Featured Section */}
             <div className="px-4 sm:px-6 space-y-6 mt-12">
               <div className="flex items-center justify-between">
-                <h3 className="text-xl sm:text-2xl font-display font-bold text-dark-surface dark:text-white tracking-tight">Featured for you</h3>
-                <button className="text-sm font-bold text-slate-400 hover:text-dark-surface dark:hover:text-white transition-colors">View all</button>
+                <h3 className="text-xl sm:text-2xl font-display font-bold text-dark-surface dark:text-white tracking-tight">
+                  {searchQuery ? 'Search Results' : 'Featured for you'}
+                </h3>
+                {!searchQuery && <button className="text-sm font-bold text-slate-400 hover:text-dark-surface dark:hover:text-white transition-colors">View all</button>}
               </div>
 
               {loading && documents.length === 0 ? (
@@ -2486,7 +2826,7 @@ export default function App() {
               ) : (
                 myFilteredResources.map((item, index) => (
                   <motion.div
-                    key={item.id}
+                    key={`${item.resourceType}-${item.id}`}
                     initial={{ opacity: 0, y: 20 }}
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: index * 0.05 }}
@@ -2568,11 +2908,17 @@ export default function App() {
                         {(!(item.resourceType === 'document' && item.status === 'approved' && !isAdmin)) && (
                           <button 
                             onClick={() => {
-                              if (confirm('Are you sure you want to delete this resource?')) {
-                                if (item.resourceType === 'document') handleDeleteDocument(item.id);
-                                else if (item.resourceType === 'marketplace') handleDeleteBusiness(item.id);
-                                else handleDeleteLostFound(item.id);
-                              }
+                              setConfirmModal({
+                                isOpen: true,
+                                title: 'Delete Resource',
+                                message: 'Are you sure you want to delete this resource? This action cannot be undone.',
+                                onConfirm: () => {
+                                  if (item.resourceType === 'document') handleDeleteDocument(item.id);
+                                  else if (item.resourceType === 'marketplace') handleDeleteBusiness(item.id);
+                                  else handleDeleteLostFound(item.id);
+                                },
+                                type: 'danger'
+                              });
                             }}
                             className="p-2 hover:bg-red-50 text-red-600 rounded-lg transition-all"
                           >
@@ -2910,9 +3256,9 @@ export default function App() {
                         <td className="px-6 py-5 hidden sm:table-cell">
                           <div className="flex items-center gap-2">
                             <div className="w-8 h-8 bg-slate-100 dark:bg-slate-800 rounded-full flex items-center justify-center text-slate-400 font-bold text-[10px]">
-                              {doc.authorName[0]}
+                              {(doc.authorName || 'U')[0]}
                             </div>
-                            <span className="text-sm font-medium text-slate-600 dark:text-slate-400">{doc.authorName}</span>
+                            <span className="text-sm font-medium text-slate-600 dark:text-slate-400">{doc.authorName || 'Unknown'}</span>
                           </div>
                         </td>
                         <td className="px-6 py-5 hidden lg:table-cell">
@@ -2960,7 +3306,13 @@ export default function App() {
                               <Edit3 size={18} />
                             </button>
                             <button 
-                              onClick={() => handleDelete(doc.id)}
+                              onClick={() => setConfirmModal({
+                              isOpen: true,
+                              title: 'Delete Document',
+                              message: 'Are you sure you want to delete this document?',
+                              onConfirm: () => handleDelete(doc.id),
+                              type: 'danger'
+                            })}
                               title="Delete"
                               className="p-2 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg text-slate-400 hover:text-red-500 transition-all"
                             >
@@ -3009,7 +3361,71 @@ export default function App() {
             </div>
 
             <div className="glass-panel overflow-hidden rounded-[2.5rem]">
-              <div className="overflow-x-auto">
+              {/* Mobile View: Card List */}
+              <div className="block sm:hidden divide-y divide-slate-100 dark:divide-slate-800">
+                {users.map((u) => (
+                  <div key={u.uid} className="p-6 space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="w-12 h-12 bg-brand-50 dark:bg-brand-900/20 rounded-2xl flex items-center justify-center text-brand-600 font-bold text-xl">
+                          {(u.displayName || 'U')[0]}
+                        </div>
+                        <div>
+                          <p className="font-bold text-dark-surface dark:text-white">{u.displayName || 'User'}</p>
+                          <p className="text-xs text-slate-400">{u.email}</p>
+                        </div>
+                      </div>
+                      <div className="flex flex-col items-end gap-2">
+                        <span className={cn(
+                          "px-3 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider",
+                          u.role === 'admin' ? "bg-brand-100 text-brand-600 dark:bg-brand-900/40 dark:text-brand-400" : "bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400"
+                        )}>
+                          {u.role}
+                        </span>
+                        <span className={cn(
+                          "flex items-center gap-1.5 text-[10px] font-bold uppercase",
+                          u.status === 'active' ? "text-emerald-500" : "text-red-500"
+                        )}>
+                          <div className={cn("w-1.5 h-1.5 rounded-full", u.status === 'active' ? "bg-emerald-500" : "bg-red-500")} />
+                          {u.status}
+                        </span>
+                      </div>
+                    </div>
+                    
+                    <div className="flex items-center justify-between pt-2">
+                      <p className="text-[10px] text-slate-400 font-bold uppercase tracking-widest">
+                        Joined {new Date(u.createdAt).toLocaleDateString()}
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <button 
+                          onClick={() => handlePromoteUser(u.uid)}
+                          className="p-3 bg-brand-50 dark:bg-brand-900/20 rounded-xl text-brand-600 dark:text-brand-400 transition-all active:scale-95"
+                        >
+                          {u.role === 'admin' ? <Shield size={20} /> : <UserPlus size={20} />}
+                        </button>
+                        <button 
+                          onClick={() => handleSuspendUser(u.uid)}
+                          className={cn(
+                            "p-3 rounded-xl transition-all active:scale-95",
+                            u.status === 'active' ? "bg-amber-50 text-amber-600" : "bg-emerald-50 text-emerald-600"
+                          )}
+                        >
+                          <Ban size={20} />
+                        </button>
+                        <button 
+                          onClick={() => handleDeleteUser(u.uid)}
+                          className="p-3 bg-red-50 dark:bg-red-900/20 rounded-xl text-red-600 dark:text-red-400 transition-all active:scale-95"
+                        >
+                          <Trash2 size={20} />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Desktop View: Table */}
+              <div className="hidden sm:block overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="border-b border-slate-100 dark:border-slate-800">
@@ -3026,10 +3442,10 @@ export default function App() {
                         <td className="px-6 py-5">
                           <div className="flex items-center gap-3">
                             <div className="w-10 h-10 bg-brand-50 dark:bg-brand-900/20 rounded-xl flex items-center justify-center text-brand-600 font-bold">
-                              {u.displayName[0]}
+                              {(u.displayName || 'U')[0]}
                             </div>
                             <div>
-                              <p className="font-bold text-dark-surface dark:text-white">{u.displayName}</p>
+                              <p className="font-bold text-dark-surface dark:text-white">{u.displayName || 'User'}</p>
                               <p className="text-xs text-slate-400">{u.email}</p>
                             </div>
                           </div>
@@ -3163,7 +3579,7 @@ export default function App() {
                 <div className="space-y-4">
                   {/* Documents */}
                   {documents.filter(doc => doc.status === 'pending').map(doc => (
-                    <div key={doc.id} className="glass-panel p-6 rounded-[2rem] space-y-4">
+                    <div key={`pending-doc-${doc.id}`} className="glass-panel p-6 rounded-[2rem] space-y-4">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-4">
                           <div className="w-10 h-10 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center">
@@ -3195,7 +3611,7 @@ export default function App() {
 
                   {/* Lost & Found */}
                   {lostFoundItems.filter(item => item.status === 'pending').map(item => (
-                    <div key={item.id} className="glass-panel p-6 rounded-[2rem] space-y-4">
+                    <div key={`pending-lf-${item.id}`} className="glass-panel p-6 rounded-[2rem] space-y-4">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-4">
                           <div className={cn(
@@ -3240,7 +3656,7 @@ export default function App() {
 
                   {/* Businesses */}
                   {businessListings.filter(b => b.status === 'pending').map(business => (
-                    <div key={business.id} className="glass-panel p-6 rounded-[2rem] space-y-4">
+                    <div key={`pending-biz-${business.id}`} className="glass-panel p-6 rounded-[2rem] space-y-4">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-4">
                           <div className="w-10 h-10 bg-indigo-50 text-indigo-600 rounded-xl flex items-center justify-center">
@@ -3266,7 +3682,7 @@ export default function App() {
                           </button>
                         </div>
                       </div>
-                      {business.imageUrls.length > 0 && (
+                      {business.imageUrls?.length > 0 && (
                         <div className="relative aspect-video rounded-xl overflow-hidden bg-slate-50">
                           <img 
                             src={business.imageUrls[0]} 
@@ -3325,7 +3741,8 @@ export default function App() {
                               message: notif.message,
                               type: notif.type,
                               active: notif.active,
-                              showOnHome: notif.showOnHome || false
+                              showOnHome: notif.showOnHome || false,
+                              userId: notif.userId || ''
                             });
                             setIsNotificationModalOpen(true);
                           }}
@@ -3542,7 +3959,13 @@ export default function App() {
                       <Edit3 size={20} />
                     </button>
                     <button 
-                      onClick={() => handleDeleteLostFound(item.id)}
+                      onClick={() => setConfirmModal({
+                        isOpen: true,
+                        title: 'Delete Item',
+                        message: 'Are you sure you want to delete this lost/found item?',
+                        onConfirm: () => handleDeleteLostFound(item.id),
+                        type: 'danger'
+                      })}
                       className="p-3 bg-red-50 text-red-600 rounded-xl hover:bg-red-100 transition-colors"
                     >
                       <Trash2 size={20} />
@@ -4275,8 +4698,8 @@ export default function App() {
               </div>
 
               {/* Modal Footer */}
-              {previewLostFound.authorPhone && (
-                <div className="px-8 py-6 border-t border-slate-100 dark:border-slate-800 shrink-0">
+              <div className="px-8 py-6 border-t border-slate-100 dark:border-slate-800 shrink-0">
+                {previewLostFound.authorPhone && (
                   <a 
                     href={`tel:${previewLostFound.authorPhone}`}
                     className="w-full py-5 bg-brand-600 hover:bg-brand-700 text-white rounded-2xl font-bold transition-all shadow-xl shadow-brand-200 flex items-center justify-center gap-3 text-lg"
@@ -4284,8 +4707,8 @@ export default function App() {
                     <Phone size={24} />
                     Contact Finder/Owner
                   </a>
-                </div>
-              )}
+                )}
+              </div>
             </motion.div>
           </div>
         )}
@@ -4594,6 +5017,20 @@ export default function App() {
                   />
                 </div>
 
+                <div className="space-y-3">
+                  <label className="text-sm font-bold text-slate-500 uppercase tracking-widest ml-1">Target User</label>
+                  <select 
+                    value={notificationFormData.userId || ''}
+                    onChange={e => setNotificationFormData({...notificationFormData, userId: e.target.value || undefined})}
+                    className="w-full px-6 py-4 bg-slate-50 border-none rounded-2xl focus:ring-4 focus:ring-dark-surface/5 transition-all"
+                  >
+                    <option value="">All Users (Global)</option>
+                    {users.map(u => (
+                      <option key={u.uid} value={u.uid}>{u.displayName} ({u.email})</option>
+                    ))}
+                  </select>
+                </div>
+
                 <div className="grid grid-cols-2 gap-6">
                   <div className="space-y-3">
                     <label className="text-sm font-bold text-slate-500 uppercase tracking-widest ml-1">Type</label>
@@ -4862,6 +5299,14 @@ export default function App() {
           </motion.button>
         )}
       </AnimatePresence>
+      <ConfirmationModal 
+        isOpen={confirmModal.isOpen}
+        onClose={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
+        onConfirm={confirmModal.onConfirm}
+        title={confirmModal.title}
+        message={confirmModal.message}
+        type={confirmModal.type}
+      />
     </>
   )}
 </div>
