@@ -1,0 +1,85 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Outfit", sans-serif;
+  
+  --color-brand-50: #eff6ff;
+  --color-brand-100: #dbeafe;
+  --color-brand-200: #bfdbfe;
+  --color-brand-300: #93c5fd;
+  --color-brand-400: #60a5fa;
+  --color-brand-500: #3b82f6;
+  --color-brand-600: #2563eb;
+  --color-brand-700: #1d4ed8;
+  --color-brand-800: #1e40af;
+  --color-brand-900: #1e3a8a;
+
+  --color-dark-surface: #0f172a;
+  --color-dark-accent: #1e293b;
+}
+
+@variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  body {
+    @apply bg-[#F0F7FF] text-slate-900 font-sans antialiased transition-colors duration-500 min-h-screen;
+    @apply dark:bg-[#020617] dark:text-slate-100;
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+    padding-left: env(safe-area-inset-left);
+    padding-right: env(safe-area-inset-right);
+  }
+}
+
+.glass-panel {
+  @apply bg-white/80 backdrop-blur-xl border border-brand-100/50 shadow-[0_8px_32px_rgba(15,23,42,0.04)] transition-all duration-500;
+  @apply dark:bg-slate-900/80 dark:border-slate-800/50 dark:shadow-[0_8px_32px_rgba(0,0,0,0.2)];
+}
+
+.featured-card {
+  @apply relative overflow-hidden rounded-[2.5rem] transition-all duration-500 hover:scale-[1.02] hover:shadow-2xl;
+}
+
+.bottom-nav-container {
+  @apply fixed bottom-4 sm:bottom-8 left-1/2 -translate-x-1/2 w-[95%] sm:w-[90%] max-w-md bg-dark-surface/95 backdrop-blur-2xl rounded-[2.5rem] p-2 sm:p-3 flex items-center justify-between shadow-2xl z-50 border border-white/10 transition-all duration-500;
+  @apply dark:bg-black/90 dark:border-white/5;
+  bottom: calc(1rem + env(safe-area-inset-bottom));
+}
+
+@media (min-width: 640px) {
+  .bottom-nav-container {
+    bottom: calc(2rem + env(safe-area-inset-bottom));
+  }
+}
+
+.bottom-nav-item {
+  @apply flex flex-col items-center justify-center gap-1 flex-1 h-14 sm:h-16 rounded-2xl transition-all duration-300;
+}
+
+.bottom-nav-item.active {
+  @apply text-white;
+}
+
+.bottom-nav-item:not(.active) {
+  @apply text-white/40 hover:text-white/70;
+}
+
+.bottom-nav-item span {
+  @apply text-[10px] sm:text-[11px] font-bold uppercase tracking-tighter;
+}
+
+.category-pill {
+  @apply px-6 py-2.5 rounded-full text-sm font-medium transition-all duration-300 whitespace-nowrap border border-transparent;
+}
+
+.category-pill.active {
+  @apply bg-brand-600 text-white shadow-lg shadow-brand-200;
+  @apply dark:shadow-brand-900/20;
+}
+
+.category-pill:not(.active) {
+  @apply bg-white text-slate-500 hover:bg-slate-50 border-slate-100;
+  @apply dark:bg-slate-800 dark:text-slate-400 dark:hover:bg-slate-700 dark:border-slate-700;
+}

@@ -2,7 +2,7 @@
 
 -- 1. Profiles Table
 CREATE TABLE IF NOT EXISTS profiles (
-  uid UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
   email TEXT UNIQUE NOT NULL,
   display_name TEXT,
   phone_number TEXT,
@@ -67,39 +67,50 @@ CREATE TABLE IF NOT EXISTS businesses (
 -- 5. Notifications Table
 CREATE TABLE IF NOT EXISTS notifications (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID REFERENCES profiles(id) ON DELETE CASCADE, -- NULL means global
   title TEXT NOT NULL,
   message TEXT NOT NULL,
   type TEXT DEFAULT 'info' CHECK (type IN ('info', 'warning', 'success')),
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   active BOOLEAN DEFAULT TRUE,
+  read BOOLEAN DEFAULT FALSE,
   show_on_home BOOLEAN DEFAULT FALSE
 );
+
+-- Notifications Policies
+ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
+CREATE POLICY "Users can view own or global notifications" ON notifications FOR SELECT USING (auth.uid() = user_id OR user_id IS NULL);
+CREATE POLICY "Users can update own notifications" ON notifications FOR UPDATE USING (auth.uid() = user_id);
+CREATE POLICY "Admins can manage all notifications" ON notifications FOR ALL USING ((SELECT role FROM profiles WHERE id = auth.uid()) = 'admin');
 
 -- RLS Policies
 
 -- Profiles
 ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Public profiles are viewable by everyone" ON profiles FOR SELECT USING (true);
-CREATE POLICY "Users can update own profile" ON profiles FOR UPDATE USING (auth.uid() = uid);
+CREATE POLICY "Users can update own profile" ON profiles FOR UPDATE USING (auth.uid() = id);
+CREATE POLICY "Admins can delete profiles" ON profiles FOR DELETE USING ((SELECT role FROM profiles WHERE id = auth.uid()) = 'admin');
 
 -- Documents
 ALTER TABLE documents ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Approved documents are viewable by everyone" ON documents FOR SELECT USING (status = 'approved' OR auth.uid() = author_id);
 CREATE POLICY "Authenticated users can insert documents" ON documents FOR INSERT WITH CHECK (auth.role() = 'authenticated');
-CREATE POLICY "Users can update own documents" ON documents FOR UPDATE USING ((auth.uid() = author_id AND status != 'approved') OR (SELECT role FROM profiles WHERE uid = auth.uid()) = 'admin');
-CREATE POLICY "Users can delete own documents" ON documents FOR DELETE USING ((auth.uid() = author_id AND status != 'approved') OR (SELECT role FROM profiles WHERE uid = auth.uid()) = 'admin');
+CREATE POLICY "Users can update own documents" ON documents FOR UPDATE USING ((auth.uid() = author_id AND status != 'approved') OR (SELECT role FROM profiles WHERE id = auth.uid()) = 'admin');
+CREATE POLICY "Users can delete own documents" ON documents FOR DELETE USING ((auth.uid() = author_id AND status != 'approved') OR (SELECT role FROM profiles WHERE id = auth.uid()) = 'admin');
 
 -- Lost & Found
 ALTER TABLE lost_found ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Lost & Found items are viewable by everyone" ON lost_found FOR SELECT USING (status = 'approved' OR auth.uid() = author_id);
 CREATE POLICY "Authenticated users can insert lost_found" ON lost_found FOR INSERT WITH CHECK (auth.role() = 'authenticated');
-CREATE POLICY "Users can update own lost_found" ON lost_found FOR UPDATE USING (auth.uid() = author_id OR (SELECT role FROM profiles WHERE uid = auth.uid()) = 'admin');
+CREATE POLICY "Users can update own lost_found" ON lost_found FOR UPDATE USING (auth.uid() = author_id OR (SELECT role FROM profiles WHERE id = auth.uid()) = 'admin');
+CREATE POLICY "Users can delete own lost_found" ON lost_found FOR DELETE USING (auth.uid() = author_id OR (SELECT role FROM profiles WHERE id = auth.uid()) = 'admin');
 
 -- Businesses
 ALTER TABLE businesses ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Businesses are viewable by everyone" ON businesses FOR SELECT USING (status = 'approved' OR auth.uid() = author_id);
 CREATE POLICY "Authenticated users can insert businesses" ON businesses FOR INSERT WITH CHECK (auth.role() = 'authenticated');
-CREATE POLICY "Users can update own businesses" ON businesses FOR UPDATE USING (auth.uid() = author_id OR (SELECT role FROM profiles WHERE uid = auth.uid()) = 'admin');
+CREATE POLICY "Users can update own businesses" ON businesses FOR UPDATE USING (auth.uid() = author_id OR (SELECT role FROM profiles WHERE id = auth.uid()) = 'admin');
+CREATE POLICY "Users can delete own businesses" ON businesses FOR DELETE USING (auth.uid() = author_id OR (SELECT role FROM profiles WHERE id = auth.uid()) = 'admin');
 
 -- Storage Buckets (Run these in the Supabase SQL Editor if needed, but usually done via UI)
 -- INSERT INTO storage.buckets (id, name, public) VALUES ('documents', 'documents', true);
