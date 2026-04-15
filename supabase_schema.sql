@@ -10,7 +10,9 @@ CREATE TABLE IF NOT EXISTS profiles (
   role TEXT DEFAULT 'student' CHECK (role IN ('student', 'admin', 'suspended')),
   status TEXT DEFAULT 'active' CHECK (status IN ('active', 'suspended')),
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-  pinned_doc_ids TEXT[] DEFAULT '{}'
+  pinned_doc_ids TEXT[] DEFAULT '{}',
+  daily_motivation TEXT,
+  motivation_last_updated DATE
 );
 
 -- 2. Documents Table
@@ -28,7 +30,9 @@ CREATE TABLE IF NOT EXISTS documents (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   file_size BIGINT,
-  views INTEGER DEFAULT 0
+  views INTEGER DEFAULT 0,
+  file_path TEXT,
+  CONSTRAINT unique_document_title UNIQUE (title)
 );
 
 -- 3. Lost & Found Table
@@ -112,9 +116,12 @@ CREATE POLICY "Authenticated users can insert businesses" ON businesses FOR INSE
 CREATE POLICY "Users can update own businesses" ON businesses FOR UPDATE USING (auth.uid() = author_id OR (SELECT role FROM profiles WHERE id = auth.uid()) = 'admin');
 CREATE POLICY "Users can delete own businesses" ON businesses FOR DELETE USING (auth.uid() = author_id OR (SELECT role FROM profiles WHERE id = auth.uid()) = 'admin');
 
--- Storage Buckets (Run these in the Supabase SQL Editor if needed, but usually done via UI)
--- INSERT INTO storage.buckets (id, name, public) VALUES ('documents', 'documents', true);
+-- Storage Buckets (Run these in the Supabase SQL Editor)
+-- The 'documents' bucket should be PRIVATE for maximum security.
+-- INSERT INTO storage.buckets (id, name, public) VALUES ('documents', 'documents', false);
 
 -- Storage Policies for 'documents' bucket
--- CREATE POLICY "Public Access" ON storage.objects FOR SELECT USING (bucket_id = 'documents');
+-- 1. Allow authenticated users to upload
 -- CREATE POLICY "Authenticated Upload" ON storage.objects FOR INSERT WITH CHECK (bucket_id = 'documents' AND auth.role() = 'authenticated');
+-- 2. Allow users to view their own pending documents or all approved documents via signed URLs
+-- CREATE POLICY "Restricted Access" ON storage.objects FOR SELECT USING (bucket_id = 'documents' AND (auth.role() = 'authenticated'));

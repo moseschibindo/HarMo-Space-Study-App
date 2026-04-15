@@ -107,7 +107,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         role: data.role,
         status: data.status,
         createdAt: data.created_at,
-        pinnedDocIds: data.pinned_doc_ids || []
+        pinnedDocIds: data.pinned_doc_ids || [],
+        dailyMotivation: data.daily_motivation,
+        motivationLastUpdated: data.motivation_last_updated
       };
       
       setProfile(mappedProfile);
@@ -169,6 +171,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (updates.role !== undefined) dbUpdates.role = updates.role;
       if (updates.status !== undefined) dbUpdates.status = updates.status;
       if (updates.pinnedDocIds !== undefined) dbUpdates.pinned_doc_ids = updates.pinnedDocIds;
+      if (updates.dailyMotivation !== undefined) dbUpdates.daily_motivation = updates.dailyMotivation;
+      if (updates.motivationLastUpdated !== undefined) dbUpdates.motivation_last_updated = updates.motivationLastUpdated;
 
       const { error } = await supabase
         .from('profiles')
@@ -180,6 +184,54 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           throw new Error('You do not have permission to update this profile.');
         }
         throw error;
+      }
+
+      // Update denormalized data in other tables if name or phone changed
+      if (updates.displayName || updates.phoneNumber) {
+        const updatePromises = [];
+
+        if (updates.displayName) {
+          // Update documents
+          updatePromises.push(
+            supabase
+              .from('documents')
+              .update({ author_name: updates.displayName })
+              .eq('author_id', user.id)
+          );
+          // Update lost_found
+          updatePromises.push(
+            supabase
+              .from('lost_found')
+              .update({ author_name: updates.displayName })
+              .eq('author_id', user.id)
+          );
+          // Update businesses
+          updatePromises.push(
+            supabase
+              .from('businesses')
+              .update({ author_name: updates.displayName })
+              .eq('author_id', user.id)
+          );
+        }
+
+        if (updates.phoneNumber) {
+          // Update lost_found
+          updatePromises.push(
+            supabase
+              .from('lost_found')
+              .update({ author_phone: updates.phoneNumber })
+              .eq('author_id', user.id)
+          );
+          // Update businesses
+          updatePromises.push(
+            supabase
+              .from('businesses')
+              .update({ contact_phone: updates.phoneNumber })
+              .eq('author_id', user.id)
+          );
+        }
+
+        await Promise.all(updatePromises);
       }
       
       setProfile(prev => prev ? { ...prev, ...updates } : null);

@@ -10,6 +10,8 @@ export interface UserProfile {
   status: 'active' | 'suspended';
   createdAt: string;
   pinnedDocIds?: string[];
+  dailyMotivation?: string;
+  motivationLastUpdated?: string;
 }
 
 export interface StudyDocument {
@@ -27,6 +29,7 @@ export interface StudyDocument {
   updatedAt: string;
   fileSize?: number; // in bytes
   views?: number;
+  filePath?: string;
 }
 
 export interface Category {
@@ -58,7 +61,7 @@ export interface LostFoundItem {
   authorId: string;
   authorName: string;
   authorPhone?: string;
-  imageUrl?: string;
+  imageUrls: string[];
   createdAt: string;
 }
 

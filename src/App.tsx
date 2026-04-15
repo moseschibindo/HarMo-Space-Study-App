@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Search, 
   Plus, 
@@ -55,16 +55,23 @@ import {
   ShoppingBag,
   Sparkles,
   ShieldAlert,
+  CheckSquare,
   Info,
   Tag,
   DollarSign,
   Image as ImageIcon,
   Sun,
-  Moon
+  Moon,
+  Camera,
+  Quote,
+  Zap,
+  UploadCloud
 } from 'lucide-react';
 import { supabase } from './lib/supabase';
 import { useAuth } from './contexts/AuthContext';
 import { StudyDocument, LostFoundItem, BusinessListing, Notification, UserProfile } from './types';
+import { generateDailyMotivation } from './services/motivationService';
+import { expandSearchQuery, intelligentFilter } from './services/searchService';
 import { cn } from './lib/utils';
 import { format } from 'date-fns';
 import { motion, AnimatePresence } from 'motion/react';
@@ -351,6 +358,10 @@ export default function App() {
   });
   const [marketSearchQuery, setMarketSearchQuery] = useState('');
   const [lostFoundSearchQuery, setLostFoundSearchQuery] = useState('');
+  const [docSearchKeywords, setDocSearchKeywords] = useState<string[]>([]);
+  const [marketSearchKeywords, setMarketSearchKeywords] = useState<string[]>([]);
+  const [lostFoundSearchKeywords, setLostFoundSearchKeywords] = useState<string[]>([]);
+  const [isExpandingSearch, setIsExpandingSearch] = useState(false);
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingDoc, setEditingDoc] = useState<StudyDocument | null>(null);
@@ -358,7 +369,8 @@ export default function App() {
   const [previewLostFound, setPreviewLostFound] = useState<LostFoundItem | null>(null);
   const [recentlyViewedBusinesses, setRecentlyViewedBusinesses] = useState<BusinessListing[]>([]);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
-  const [fullscreenImage, setFullscreenImage] = useState<string | null>(null);
+  const [fullscreenImages, setFullscreenImages] = useState<string[] | null>(null);
+  const [fullscreenIndex, setFullscreenIndex] = useState(0);
   const [readingDoc, setReadingDoc] = useState<StudyDocument | null>(null);
   const [showBackToTop, setShowBackToTop] = useState(false);
 
@@ -391,7 +403,8 @@ export default function App() {
   const [manageDocsFilter, setManageDocsFilter] = useState({
     status: 'all',
     category: 'all',
-    search: ''
+    search: '',
+    showDuplicates: false
   });
   const [myDocsFilter, setMyDocsFilter] = useState({
     status: 'all',
@@ -402,6 +415,11 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [showSplash, setShowSplash] = useState(true);
   const [isUploadingAvatar, setIsUploadingAvatar] = useState(false);
+  const [isEditingProfile, setIsEditingProfile] = useState(false);
+  const [profileFormData, setProfileFormData] = useState({
+    displayName: '',
+    phoneNumber: ''
+  });
   const avatarInputRef = React.useRef<HTMLInputElement>(null);
   const [confirmModal, setConfirmModal] = useState<{
     isOpen: boolean;
@@ -456,7 +474,7 @@ export default function App() {
   const [lostFoundItems, setLostFoundItems] = useState<LostFoundItem[]>([]);
   const [isLostFoundModalOpen, setIsLostFoundModalOpen] = useState(false);
   const [editingLostFound, setEditingLostFound] = useState<LostFoundItem | null>(null);
-  const [selectedImage, setSelectedImage] = useState<File | null>(null);
+  const [selectedLostFoundImages, setSelectedLostFoundImages] = useState<File[]>([]);
   const [lostFoundFormData, setLostFoundFormData] = useState({
     title: '',
     description: '',
@@ -556,6 +574,31 @@ export default function App() {
   }, [user, isAdmin]);
 
   useEffect(() => {
+    if (profile && activeTab === 'profile') {
+      const today = new Date().toISOString().split('T')[0];
+      if (profile.motivationLastUpdated !== today) {
+        const updateMotivation = async () => {
+          const newMotivation = await generateDailyMotivation(profile.displayName);
+          updateProfile({
+            dailyMotivation: newMotivation,
+            motivationLastUpdated: today
+          });
+        };
+        updateMotivation();
+      }
+    }
+  }, [profile, activeTab]);
+
+  useEffect(() => {
+    if (profile) {
+      setProfileFormData({
+        displayName: profile.displayName || '',
+        phoneNumber: profile.phoneNumber || ''
+      });
+    }
+  }, [profile]);
+
+  useEffect(() => {
     if (editingDoc) {
       setFormData({
         title: editingDoc.title,
@@ -653,7 +696,8 @@ export default function App() {
         createdAt: doc.created_at,
         updatedAt: doc.updated_at,
         fileSize: doc.file_size,
-        views: doc.views
+        views: doc.views,
+        filePath: doc.file_path
       }));
       
       setDocuments(mappedDocs);
@@ -762,18 +806,41 @@ export default function App() {
   const handleAddDocument = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!user) return;
-    if (selectedFiles.length === 0 && !editingDoc) {
-      toast.error('Please select at least one file to upload');
-      return;
-    }
-
-    setIsUploading(true);
-    let successCount = 0;
-    const totalFiles = selectedFiles.length;
+    
     try {
+      if (selectedFiles.length === 0 && !editingDoc) {
+        toast.error('Please select at least one file to upload');
+        return;
+      }
+
+      // Duplicate check with extra safety
+      const existingTitles = (documents || []).map(d => (d.title || '').toLowerCase().trim()).filter(Boolean);
+      if (!editingDoc) {
+        const duplicates = selectedFiles.filter(f => {
+          const title = (f.name.split('.')[0] || '').toLowerCase().trim();
+          return existingTitles.includes(title);
+        });
+        if (duplicates.length > 0) {
+          toast.error(`Found ${duplicates.length} duplicate document(s). Please remove them before uploading.`);
+          return;
+        }
+      } else {
+        const otherTitles = (documents || []).filter(d => d.id !== editingDoc.id).map(d => (d.title || '').toLowerCase().trim()).filter(Boolean);
+        const newTitle = (formData.title || '').toLowerCase().trim();
+        if (otherTitles.includes(newTitle)) {
+          toast.error('A document with this title already exists.');
+          return;
+        }
+      }
+
+      setIsUploading(true);
+      let successCount = 0;
+      const totalFiles = selectedFiles.length;
+
       if (editingDoc) {
         // Single document update logic
         let fileUrl = formData.url;
+        let filePathStored = editingDoc.filePath;
         if (selectedFiles.length > 0) {
           const file = selectedFiles[0];
           const fileExt = file.name.split('.').pop();
@@ -791,13 +858,15 @@ export default function App() {
             .getPublicUrl(filePath);
           
           fileUrl = publicUrl;
+          filePathStored = filePath;
         }
-
+          
         const docData = {
           title: formData.title,
           description: formData.description,
           type: formData.type,
           url: fileUrl,
+          file_path: filePathStored,
           category: formData.category,
           status: isAdmin ? 'approved' : 'pending',
           updated_at: new Date().toISOString()
@@ -808,6 +877,7 @@ export default function App() {
           .update(docData)
           .eq('id', editingDoc.id);
         if (error) throw error;
+        successCount = 1;
       } else {
         // Bulk upload logic
         setUploadProgress({ current: 0, total: selectedFiles.length });
@@ -834,8 +904,9 @@ export default function App() {
             const docData = {
               title: selectedFiles.length === 1 ? formData.title : file.name.split('.')[0],
               description: formData.description,
-              type: (file.name.split('.').pop()?.toLowerCase() === 'docx' ? 'pdf' : 'pdf') as 'pdf' | 'docx', // Default to pdf for now, or detect
+              type: (file.name.split('.').pop()?.toLowerCase() === 'docx' ? 'docx' : 'pdf') as 'pdf' | 'docx',
               url: publicUrl,
+              file_path: filePath,
               category: formData.category,
               status: isAdmin ? 'approved' : 'pending',
               author_id: user.id,
@@ -844,10 +915,6 @@ export default function App() {
               updated_at: new Date().toISOString(),
               file_size: file.size
             };
-
-            // Better type detection
-            const actualExt = file.name.split('.').pop()?.toLowerCase();
-            if (actualExt === 'docx') docData.type = 'docx';
 
             const { error } = await supabase
               .from('documents')
@@ -867,7 +934,9 @@ export default function App() {
       setUploadProgress(null);
       setRestrictToPdf(false);
       setFormData({ title: '', description: '', type: 'pdf', url: '', category: 'General' });
-      fetchDocuments();
+      
+      // Fetch documents after a short delay to ensure DB consistency
+      setTimeout(() => fetchDocuments(), 500);
       
       if (editingDoc) {
         toast.success('Document updated');
@@ -940,6 +1009,50 @@ export default function App() {
       console.error('Error approving/rejecting document:', err);
       toast.error(`Failed to update document: ${err.message}`);
       setDocuments(documents.map(doc => doc.id === id ? { ...doc, status } : doc));
+    }
+  };
+
+  const handleReadDoc = async (doc: StudyDocument) => {
+    incrementViews(doc.id);
+    if (doc.filePath) {
+      try {
+        const { data, error } = await supabase.storage
+          .from('documents')
+          .createSignedUrl(doc.filePath, 3600); // 1 hour
+        if (error) throw error;
+        setReadingDoc({ ...doc, url: data.signedUrl });
+      } catch (err) {
+        console.error('Error creating signed URL:', err);
+        toast.error('Failed to access document securely');
+        setReadingDoc(doc);
+      }
+    } else {
+      setReadingDoc(doc);
+    }
+  };
+
+  const handleDownloadDoc = async (doc: StudyDocument) => {
+    if (!doc.filePath) {
+      window.open(doc.url, '_blank');
+      return;
+    }
+    
+    try {
+      const { data, error } = await supabase.storage
+        .from('documents')
+        .createSignedUrl(doc.filePath, 60); // 60 seconds
+      if (error) throw error;
+      
+      const link = document.createElement('a');
+      link.href = data.signedUrl;
+      link.download = doc.title;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      toast.success('Download started');
+    } catch (err) {
+      console.error('Error downloading document:', err);
+      toast.error('Failed to download document securely');
     }
   };
 
@@ -1061,6 +1174,7 @@ export default function App() {
 
   const notifyAdmins = async (title: string, message: string) => {
     try {
+      if (!users || users.length === 0) return;
       const admins = users.filter(u => u.role === 'admin');
       if (admins.length === 0) return;
 
@@ -1218,24 +1332,27 @@ export default function App() {
 
     setIsUploading(true);
     try {
-      let imageUrl = editingLostFound?.imageUrl || '';
+      let imageUrls = editingLostFound?.imageUrls || [];
 
-      if (selectedImage) {
-        const fileExt = selectedImage.name.split('.').pop();
-        const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
-        const filePath = `lost_found/${user.id}/${fileName}`;
+      if (selectedLostFoundImages.length > 0) {
+        const newUrls = await Promise.all(selectedLostFoundImages.map(async (file) => {
+          const fileExt = file.name.split('.').pop();
+          const fileName = `${Math.random().toString(36).substring(2)}.${fileExt}`;
+          const filePath = `lost_found/${user.id}/${fileName}`;
 
-        const { error: uploadError } = await supabase.storage
-          .from('documents')
-          .upload(filePath, selectedImage);
+          const { error: uploadError } = await supabase.storage
+            .from('documents')
+            .upload(filePath, file);
 
-        if (uploadError) throw uploadError;
+          if (uploadError) throw uploadError;
 
-        const { data: { publicUrl } } = supabase.storage
-          .from('documents')
-          .getPublicUrl(filePath);
-        
-        imageUrl = publicUrl;
+          const { data: { publicUrl } } = supabase.storage
+            .from('documents')
+            .getPublicUrl(filePath);
+          
+          return publicUrl;
+        }));
+        imageUrls = [...imageUrls, ...newUrls].slice(0, 2);
       }
 
       const itemData = {
@@ -1244,7 +1361,7 @@ export default function App() {
         type: lostFoundFormData.type,
         location: lostFoundFormData.location,
         date: lostFoundFormData.date,
-        image_url: imageUrl,
+        image_urls: imageUrls,
         status: isAdmin ? 'approved' : 'pending'
       };
 
@@ -1272,7 +1389,7 @@ export default function App() {
 
       setIsLostFoundModalOpen(false);
       setEditingLostFound(null);
-      setSelectedImage(null);
+      setSelectedLostFoundImages([]);
       setLostFoundFormData({
         title: '',
         description: '',
@@ -1544,12 +1661,12 @@ export default function App() {
     if (!file || !user) return;
 
     if (!file.type.startsWith('image/')) {
-      alert('Please upload an image file.');
+      toast.error('Please upload an image file.');
       return;
     }
 
     if (file.size > 2 * 1024 * 1024) {
-      alert('Image size should be less than 2MB.');
+      toast.error('Image size should be less than 2MB.');
       return;
     }
 
@@ -1577,11 +1694,43 @@ export default function App() {
       if (updateError) throw updateError;
 
       updateProfile({ avatarUrl: publicUrl });
-    } catch (err) {
+      toast.success('Profile picture updated');
+    } catch (err: any) {
       console.error('Error uploading avatar:', err);
-      alert('Failed to upload profile picture. Check console for details.');
+      toast.error('Failed to upload profile picture');
     } finally {
       setIsUploadingAvatar(false);
+    }
+  };
+
+  const handleProfileUpdate = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const newDisplayName = profileFormData.displayName;
+      const newPhoneNumber = profileFormData.phoneNumber;
+
+      await updateProfile({
+        displayName: newDisplayName,
+        phoneNumber: newPhoneNumber
+      });
+
+      // Update local states to reflect changes immediately
+      setDocuments(prev => prev.map(doc => 
+        doc.authorId === user?.id ? { ...doc, authorName: newDisplayName } : doc
+      ));
+      
+      setLostFoundItems(prev => prev.map(item => 
+        item.authorId === user?.id ? { ...item, authorName: newDisplayName, authorPhone: newPhoneNumber } : item
+      ));
+      
+      setBusinessListings(prev => prev.map(biz => 
+        biz.authorId === user?.id ? { ...biz, authorName: newDisplayName, contactPhone: newPhoneNumber } : biz
+      ));
+
+      setIsEditingProfile(false);
+      toast.success('Profile updated successfully');
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to update profile');
     }
   };
 
@@ -1625,7 +1774,7 @@ export default function App() {
         authorId: item.author_id,
         authorName: item.author_name,
         authorPhone: item.author_phone,
-        imageUrl: item.image_url,
+        imageUrls: item.image_urls || (item.image_url ? [item.image_url] : []),
         createdAt: item.created_at
       }));
       
@@ -1683,12 +1832,53 @@ export default function App() {
     }
   };
 
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      if (searchQuery.trim()) {
+        setIsExpandingSearch(true);
+        const keywords = await expandSearchQuery(searchQuery);
+        setDocSearchKeywords(keywords);
+        setIsExpandingSearch(false);
+      } else {
+        setDocSearchKeywords([]);
+      }
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      if (marketSearchQuery.trim()) {
+        setIsExpandingSearch(true);
+        const keywords = await expandSearchQuery(marketSearchQuery);
+        setMarketSearchKeywords(keywords);
+        setIsExpandingSearch(false);
+      } else {
+        setMarketSearchKeywords([]);
+      }
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [marketSearchQuery]);
+
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      if (lostFoundSearchQuery.trim()) {
+        setIsExpandingSearch(true);
+        const keywords = await expandSearchQuery(lostFoundSearchQuery);
+        setLostFoundSearchKeywords(keywords);
+        setIsExpandingSearch(false);
+      } else {
+        setLostFoundSearchKeywords([]);
+      }
+    }, 800);
+    return () => clearTimeout(timer);
+  }, [lostFoundSearchQuery]);
+
   const displayDocs = documents.filter(doc => doc.status === 'approved');
 
   const filteredDocs = displayDocs.filter(doc => {
-    const matchesSearch = doc.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         doc.description.toLowerCase().includes(searchQuery.toLowerCase()) ||
-                         doc.category.toLowerCase().includes(searchQuery.toLowerCase());
+    const matchesSearch = searchQuery.trim() === '' || 
+                         intelligentFilter(doc, docSearchKeywords.length > 0 ? docSearchKeywords : [searchQuery], ['title', 'description', 'category']);
     
     const matchesCategory = selectedCategory === 'All' || 
                            (selectedCategory === 'Pinned' ? profile?.pinnedDocIds?.includes(doc.id) : doc.category === selectedCategory);
@@ -1701,26 +1891,86 @@ export default function App() {
 
   const filteredMarketItems = businessListings.filter(item => 
     item.status === 'approved' && (
-      item.title.toLowerCase().includes(marketSearchQuery.toLowerCase()) ||
-      item.description.toLowerCase().includes(marketSearchQuery.toLowerCase()) ||
-      item.category.toLowerCase().includes(marketSearchQuery.toLowerCase())
+      marketSearchQuery.trim() === '' || 
+      intelligentFilter(item, marketSearchKeywords.length > 0 ? marketSearchKeywords : [marketSearchQuery], ['title', 'description', 'category'])
     )
   );
 
   const filteredLostFoundItems = lostFoundItems.filter(item => 
     item.status === 'approved' && (
-      item.title.toLowerCase().includes(lostFoundSearchQuery.toLowerCase()) ||
-      item.description.toLowerCase().includes(lostFoundSearchQuery.toLowerCase()) ||
-      item.location.toLowerCase().includes(lostFoundSearchQuery.toLowerCase())
+      lostFoundSearchQuery.trim() === '' || 
+      intelligentFilter(item, lostFoundSearchKeywords.length > 0 ? lostFoundSearchKeywords : [lostFoundSearchQuery], ['title', 'description', 'location'])
     )
   );
 
+  const duplicateIds = useMemo(() => {
+    const titleMap = new Map<string, string[]>();
+    // Sort documents by creation date to identify the "original" (oldest)
+    const sortedDocs = [...documents].sort((a, b) => 
+      new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+    );
+
+    sortedDocs.forEach(doc => {
+      if (!doc.title) return;
+      const key = doc.title.toLowerCase().trim();
+      if (!titleMap.has(key)) titleMap.set(key, []);
+      titleMap.get(key)!.push(doc.id);
+    });
+    
+    const ids = new Set<string>();
+    titleMap.forEach(docIds => {
+      if (docIds.length > 1) {
+        // Keep the first one (oldest), mark others as redundant duplicates
+        docIds.slice(1).forEach(id => ids.add(id));
+      }
+    });
+    return ids;
+  }, [documents]);
+
+  const handleDeleteAllDuplicates = async () => {
+    if (!isAdmin || duplicateIds.size === 0) return;
+    
+    setConfirmModal({
+      isOpen: true,
+      title: 'Delete All Duplicates',
+      message: `Are you sure you want to delete all ${duplicateIds.size} redundant duplicate documents? This will keep the oldest version of each document and remove the extra copies.`,
+      onConfirm: async () => {
+        try {
+          const idsToDelete = Array.from(duplicateIds);
+          const { error } = await supabase
+            .from('documents')
+            .delete()
+            .in('id', idsToDelete);
+          
+          if (error) throw error;
+          
+          fetchDocuments();
+          setSelectedDocIds([]);
+          toast.success(`${idsToDelete.length} redundant documents deleted`);
+        } catch (err: any) {
+          console.error('Error deleting duplicates:', err);
+          toast.error(`Failed to delete duplicates: ${err.message}`);
+        }
+      },
+      type: 'danger'
+    });
+  };
+
   const manageFilteredDocs = documents.filter(doc => {
-    const matchesSearch = doc.title.toLowerCase().includes(manageDocsFilter.search.toLowerCase()) ||
-                         doc.authorName.toLowerCase().includes(manageDocsFilter.search.toLowerCase());
+    const title = doc.title || '';
+    const authorName = doc.authorName || '';
+    const search = manageDocsFilter.search.toLowerCase();
+    
+    const matchesSearch = title.toLowerCase().includes(search) ||
+                         authorName.toLowerCase().includes(search);
     const matchesStatus = manageDocsFilter.status === 'all' || doc.status === manageDocsFilter.status;
     const matchesCategory = manageDocsFilter.category === 'all' || doc.category === manageDocsFilter.category;
-    return matchesSearch && matchesStatus && matchesCategory;
+    
+    // Show both the original and duplicates when filtering for duplicates
+    const matchesDuplicates = !manageDocsFilter.showDuplicates || 
+                             documents.filter(d => d.title?.toLowerCase().trim() === title.toLowerCase().trim()).length > 1;
+                             
+    return matchesSearch && matchesStatus && matchesCategory && matchesDuplicates;
   });
 
   const [resourceTypeFilter, setResourceTypeFilter] = useState<'all' | 'documents' | 'marketplace' | 'lostfound'>('all');
@@ -1738,24 +1988,19 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-[#F0F7FF] dark:bg-[#020617] transition-colors duration-500">
-      <AnimatePresence>
-        {showSplash && (
+      <AnimatePresence mode="wait">
+        {(showSplash || authLoading) && (
           <motion.div
+            key="splash-container"
             initial={{ opacity: 1 }}
-            exit={{ opacity: 0, scale: 1.1, filter: "blur(20px)" }}
-            transition={{ duration: 1, ease: [0.43, 0.13, 0.23, 0.96] }}
+            exit={{ 
+              opacity: 0,
+              transition: { duration: 0.8, ease: [0.43, 0.13, 0.23, 0.96] }
+            }}
             className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-[#020617] overflow-hidden"
           >
-            {/* Scanning Line Effect */}
-            <motion.div
-              initial={{ top: "-10%" }}
-              animate={{ top: "110%" }}
-              transition={{ duration: 3, repeat: Infinity, ease: "linear" }}
-              className="absolute left-0 right-0 h-[2px] bg-gradient-to-r from-transparent via-brand-400/50 to-transparent z-20"
-            />
-
             {/* Dynamic Colorful Blobs */}
-            <div className="absolute inset-0 overflow-hidden">
+            <div className="absolute inset-0 overflow-hidden pointer-events-none">
               <motion.div
                 animate={{
                   x: [0, 100, 0],
@@ -1774,167 +2019,71 @@ export default function App() {
                 transition={{ duration: 18, repeat: Infinity, ease: "easeInOut" }}
                 className="absolute -bottom-[10%] -right-[10%] w-[70%] h-[70%] bg-violet-600/20 rounded-full blur-[120px]"
               />
-              <motion.div
-                animate={{
-                  x: [0, 50, 0],
-                  y: [0, 80, 0],
-                  scale: [1, 1.1, 1],
-                }}
-                transition={{ duration: 12, repeat: Infinity, ease: "easeInOut" }}
-                className="absolute top-[20%] right-[10%] w-[40%] h-[40%] bg-emerald-500/20 rounded-full blur-[100px]"
-              />
-              <motion.div
-                animate={{
-                  x: [0, -60, 0],
-                  y: [0, -40, 0],
-                  scale: [1, 1.2, 1],
-                }}
-                transition={{ duration: 20, repeat: Infinity, ease: "easeInOut" }}
-                className="absolute bottom-[20%] left-[10%] w-[45%] h-[45%] bg-amber-500/10 rounded-full blur-[100px]"
-              />
             </div>
 
-            {/* Particle field effect */}
-            <div className="absolute inset-0 opacity-30">
-              {[...Array(20)].map((_, i) => (
-                <motion.div
-                  key={i}
-                  initial={{ opacity: 0, scale: 0 }}
-                  animate={{ 
-                    opacity: [0, 1, 0],
-                    scale: [0, 1, 0],
-                    y: [0, -100],
-                    x: Math.random() * 40 - 20
-                  }}
-                  transition={{ 
-                    duration: 2 + Math.random() * 3,
-                    repeat: Infinity,
-                    delay: Math.random() * 5
-                  }}
-                  className="absolute w-1 h-1 bg-white rounded-full"
-                  style={{
-                    left: `${Math.random() * 100}%`,
-                    top: `${Math.random() * 100}%`
-                  }}
-                />
-              ))}
-            </div>
-            
             <motion.div
-              initial={{ y: 40, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              transition={{ delay: 0.3, duration: 1, ease: "easeOut" }}
-              className="relative z-10 text-center space-y-8"
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ scale: 1.1, opacity: 0, filter: "blur(10px)", transition: { duration: 0.6 } }}
+              className="relative z-10 flex flex-col items-center gap-12"
             >
-              <motion.div 
-                animate={{ 
-                  y: [0, -15, 0],
-                }}
-                transition={{ 
-                  y: { duration: 4, repeat: Infinity, ease: "easeInOut" },
-                }}
-                className="mx-auto relative group"
-              >
+              <div className="relative">
+                <motion.div 
+                  animate={{ scale: [1, 1.05, 1] }}
+                  transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }}
+                  className="absolute -inset-8 bg-brand-500/20 blur-3xl rounded-full" 
+                />
                 <Logo size={120} />
-              </motion.div>
-              
-              <div className="space-y-3">
-                <motion.div
-                  initial={{ opacity: 0, scale: 0.8 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  transition={{ delay: 0.6, duration: 0.8 }}
-                >
-                  <h1 className="text-5xl sm:text-7xl font-display font-black text-white tracking-tighter flex items-center justify-center gap-2 relative">
-                    <motion.span 
-                      animate={{ 
-                        textShadow: [
-                          "0 0 0px rgba(255,255,255,0)",
-                          "2px 0 5px rgba(124,58,237,0.5)",
-                          "-2px 0 5px rgba(16,185,129,0.5)",
-                          "0 0 0px rgba(255,255,255,0)"
-                        ],
-                        x: [0, -1, 1, -1, 0]
-                      }}
-                      transition={{ duration: 0.2, repeat: Infinity, repeatDelay: 3 }}
-                      className="bg-clip-text text-transparent bg-gradient-to-r from-white via-brand-200 to-white animate-gradient-x"
-                    >
-                      HarMo Space
-                    </motion.span>
-                    <span className="text-brand-400">360</span>
-                  </h1>
-                </motion.div>
                 
+                {/* Orbiting rings for extra polish */}
                 <motion.div
-                  initial={{ opacity: 0, y: 10 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ delay: 1, duration: 0.8 }}
-                  className="flex flex-col items-center gap-4"
-                >
-                  <p className="text-brand-200/80 font-bold tracking-[0.4em] uppercase text-[10px] sm:text-xs">
-                    Your Academic Universe
-                  </p>
-                  
-                  <div className="flex items-center gap-2 px-4 py-2 bg-white/5 backdrop-blur-md rounded-full border border-white/10">
-                    <div className="w-1.5 h-1.5 bg-brand-400 rounded-full animate-pulse"></div>
-                    <motion.span 
-                      animate={{ opacity: [0.5, 1, 0.5] }}
-                      transition={{ duration: 2, repeat: Infinity }}
-                      className="text-[10px] font-bold text-white/60 uppercase tracking-widest"
-                    >
-                      <LoadingText />
-                    </motion.span>
-                  </div>
-                </motion.div>
+                  animate={{ rotate: 360 }}
+                  transition={{ duration: 10, repeat: Infinity, ease: "linear" }}
+                  className="absolute -inset-6 border border-brand-500/20 rounded-full"
+                />
+                <motion.div
+                  animate={{ rotate: -360 }}
+                  transition={{ duration: 15, repeat: Infinity, ease: "linear" }}
+                  className="absolute -inset-10 border border-brand-400/10 rounded-full"
+                />
+              </div>
+
+              <div className="space-y-6 text-center">
+                <div className="space-y-2">
+                  <motion.h1
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.3 }}
+                    className="text-3xl font-display font-bold text-white tracking-[0.2em] uppercase"
+                  >
+                    HarMo Space 360
+                  </motion.h1>
+                  <motion.p
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 0.5 }}
+                    className="text-brand-400/60 text-[10px] font-bold tracking-[0.4em] uppercase"
+                  >
+                    {authLoading ? "Securing Connection..." : "Welcome to the Future"}
+                  </motion.p>
+                </div>
+                
+                <div className="flex justify-center">
+                  <CoolLoader size={40} color="brand" />
+                </div>
               </div>
             </motion.div>
-            
-            <div className="absolute bottom-20 w-64 h-1 bg-white/10 rounded-full overflow-hidden">
-              <motion.div
-                initial={{ left: "-100%" }}
-                animate={{ left: "100%" }}
-                transition={{ duration: 1.5, repeat: Infinity, ease: "linear" }}
-                className="absolute top-0 bottom-0 w-1/3 bg-gradient-to-r from-transparent via-brand-400 to-transparent shadow-[0_0_20px_rgba(124,58,237,0.8)]"
-              />
-            </div>
           </motion.div>
         )}
       </AnimatePresence>
 
-      {authLoading ? (
-        <div className="min-h-screen flex flex-col items-center justify-center bg-[#020617] overflow-hidden relative">
-          {/* Background Glow */}
-          <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-brand-600/20 rounded-full blur-[120px] animate-pulse"></div>
-          
-          <motion.div
-            initial={{ scale: 0.8, opacity: 0 }}
-            animate={{ scale: 1, opacity: 1 }}
-            className="relative z-10 flex flex-col items-center gap-8"
-          >
-            <div className="relative">
-              <motion.div
-                animate={{ rotate: 360 }}
-                transition={{ duration: 8, repeat: Infinity, ease: "linear" }}
-                className="absolute -inset-8 border-2 border-dashed border-brand-400/30 rounded-full"
-              />
-              <motion.div
-                animate={{ rotate: -360 }}
-                transition={{ duration: 12, repeat: Infinity, ease: "linear" }}
-                className="absolute -inset-12 border border-brand-500/20 rounded-full"
-              />
-              <div className="relative bg-[#020617] p-4 rounded-3xl border border-white/10 shadow-2xl">
-                <Logo size={80} />
-              </div>
-            </div>
-
-            <div className="space-y-4 text-center">
-              <CoolLoader size={32} color="brand" />
-              <p className="text-brand-200/60 font-bold tracking-[0.3em] uppercase text-[10px]">
-                Securing Connection
-              </p>
-            </div>
-          </motion.div>
-        </div>
-      ) : !user ? (
+      {!showSplash && !authLoading && (
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ duration: 0.5 }}
+        >
+          {!user ? (
         <div className="min-h-screen bg-[#F0F7FF] dark:bg-[#020617] flex items-center justify-center p-4 sm:p-6">
           <motion.div 
             initial={{ opacity: 0, y: 20 }}
@@ -2241,17 +2390,28 @@ export default function App() {
             {/* Search Bar */}
             <div className="px-4 sm:px-6">
               <div className="relative group">
-                <Search className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-dark-surface dark:group-focus-within:text-white transition-colors" size={20} />
+                <Search className={cn(
+                  "absolute left-5 top-1/2 -translate-y-1/2 transition-colors",
+                  isExpandingSearch ? "text-brand-500 animate-pulse" : "text-slate-400 group-focus-within:text-dark-surface dark:group-focus-within:text-white"
+                )} size={20} />
                 <input 
                   type="text"
                   placeholder={getDynamicPlaceholder()}
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full pl-14 pr-6 py-5 bg-white dark:bg-slate-900 border-none rounded-[2rem] focus:outline-none focus:ring-4 focus:ring-dark-surface/5 dark:focus:ring-white/5 transition-all shadow-[0_4px_20px_rgba(0,0,0,0.03)] text-lg text-dark-surface dark:text-white"
+                  className="w-full pl-14 pr-24 py-5 bg-white dark:bg-slate-900 border-none rounded-[2rem] focus:outline-none focus:ring-4 focus:ring-dark-surface/5 dark:focus:ring-white/5 transition-all shadow-[0_4px_20px_rgba(0,0,0,0.03)] text-lg text-dark-surface dark:text-white"
                 />
-                <button className="absolute right-4 top-1/2 -translate-y-1/2 p-2.5 bg-brand-600 text-white rounded-xl shadow-lg shadow-brand-200">
-                  <ListIcon size={18} />
-                </button>
+                <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                  {docSearchKeywords.length > 0 && searchQuery.trim() !== '' && (
+                    <div className="px-2 py-1 bg-brand-50 dark:bg-brand-900/30 text-brand-600 dark:text-brand-400 text-[10px] font-bold rounded-lg flex items-center gap-1 animate-in fade-in zoom-in">
+                      <Sparkles size={10} />
+                      Smart
+                    </div>
+                  )}
+                  <button className="p-2.5 bg-brand-600 text-white rounded-xl shadow-lg shadow-brand-200">
+                    <ListIcon size={18} />
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -2285,8 +2445,7 @@ export default function App() {
                         key={`recent-${doc.id}`}
                         whileHover={{ y: -5 }}
                         onClick={() => {
-                          setReadingDoc(doc);
-                          incrementViews(doc.id);
+                          handleReadDoc(doc);
                         }}
                         className="w-64 sm:w-72 shrink-0 glass-panel p-4 rounded-[2.5rem] space-y-4 group cursor-pointer"
                       >
@@ -2327,8 +2486,7 @@ export default function App() {
                             <button 
                               onClick={(e) => {
                                 e.stopPropagation();
-                                setReadingDoc(doc);
-                                incrementViews(doc.id);
+                                handleReadDoc(doc);
                               }}
                               className="px-3 py-1 bg-brand-50 text-brand-600 rounded-lg text-[10px] font-bold hover:bg-brand-600 hover:text-white transition-all"
                             >
@@ -2357,8 +2515,7 @@ export default function App() {
                         key={`trending-${doc.id}`}
                         whileHover={{ y: -5 }}
                         onClick={() => {
-                          setReadingDoc(doc);
-                          incrementViews(doc.id);
+                          handleReadDoc(doc);
                         }}
                         className="w-72 sm:w-80 shrink-0 featured-card aspect-[16/10] relative overflow-hidden rounded-[2.5rem] cursor-pointer"
                       >
@@ -2401,8 +2558,7 @@ export default function App() {
                           <button 
                             onClick={(e) => {
                               e.stopPropagation();
-                              setReadingDoc(doc);
-                              incrementViews(doc.id);
+                              handleReadDoc(doc);
                             }}
                             className="px-4 py-2 bg-white text-brand-600 rounded-xl text-[10px] font-bold hover:bg-brand-600 hover:text-white transition-all shadow-lg shrink-0"
                           >
@@ -2446,8 +2602,7 @@ export default function App() {
                       layout
                       key={`featured-${doc.id}`}
                       onClick={() => {
-                        setReadingDoc(doc);
-                        incrementViews(doc.id);
+                        handleReadDoc(doc);
                       }}
                       className="featured-card aspect-[3/4] relative overflow-hidden rounded-[2rem] cursor-pointer"
                     >
@@ -2491,8 +2646,7 @@ export default function App() {
                         <button 
                           onClick={(e) => {
                             e.stopPropagation();
-                            setReadingDoc(doc);
-                            incrementViews(doc.id);
+                            handleReadDoc(doc);
                           }}
                           className="w-full py-2 bg-white text-dark-surface rounded-xl font-bold text-[10px] shadow-xl shadow-brand-900/10 flex items-center justify-center gap-1 hover:scale-105 transition-transform"
                         >
@@ -2541,7 +2695,10 @@ export default function App() {
             {/* Search Bar */}
             <div className="px-0">
               <div className="relative group">
-                <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-brand-600 transition-colors" size={20} />
+                <Search className={cn(
+                  "absolute left-6 top-1/2 -translate-y-1/2 transition-colors",
+                  isExpandingSearch ? "text-brand-500 animate-pulse" : "text-slate-400 group-focus-within:text-brand-600"
+                )} size={20} />
                 <input 
                   type="text"
                   value={marketSearchQuery}
@@ -2549,6 +2706,14 @@ export default function App() {
                   placeholder="Search products, services, or categories..."
                   className="w-full pl-16 pr-6 py-5 bg-white dark:bg-slate-900 border-none rounded-[2rem] shadow-xl shadow-brand-900/5 focus:ring-4 focus:ring-brand-500/10 transition-all text-lg font-medium text-dark-surface dark:text-white"
                 />
+                {marketSearchKeywords.length > 0 && marketSearchQuery.trim() !== '' && (
+                  <div className="absolute right-6 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                    <div className="px-3 py-1.5 bg-brand-50 dark:bg-brand-900/30 text-brand-600 dark:text-brand-400 text-xs font-bold rounded-xl flex items-center gap-2 animate-in fade-in zoom-in">
+                      <Sparkles size={14} />
+                      Smart Search
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -2640,92 +2805,169 @@ export default function App() {
           <motion.div 
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            className="px-4 sm:px-6 space-y-8"
+            className="px-4 sm:px-6 space-y-8 pb-24"
           >
-            <div className="text-center space-y-4">
-              <div className="relative inline-block">
-                <div className="w-32 h-32 bg-brand-50 rounded-[2.5rem] flex items-center justify-center mx-auto border-4 border-white shadow-xl relative overflow-hidden">
-                  {profile?.avatarUrl ? (
-                    <img src={profile.avatarUrl} alt="Profile" className="w-full h-full object-cover rounded-[2.5rem]" />
-                  ) : (
-                    <UserIcon className="text-brand-600" size={48} />
-                  )}
-                  {isUploadingAvatar && (
-                    <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
-                      <CoolLoader size={32} />
-                    </div>
-                  )}
+            {/* Profile Header */}
+            <div className="relative glass-panel p-8 rounded-[3rem] overflow-hidden">
+              <div className="absolute top-0 right-0 w-64 h-64 bg-brand-500/10 rounded-full blur-3xl -mr-32 -mt-32" />
+              <div className="absolute bottom-0 left-0 w-48 h-48 bg-brand-600/10 rounded-full blur-3xl -ml-24 -mb-24" />
+              
+              <div className="relative flex flex-col md:flex-row items-center gap-8 text-center md:text-left">
+                <div className="relative group">
+                  <div className="w-32 h-32 bg-brand-50 rounded-[2.5rem] flex items-center justify-center border-4 border-white shadow-xl relative overflow-hidden transition-transform group-hover:scale-105">
+                    {profile?.avatarUrl ? (
+                      <img src={profile.avatarUrl} alt="Profile" className="w-full h-full object-cover rounded-[2.5rem]" referrerPolicy="no-referrer" />
+                    ) : (
+                      <UserIcon className="text-brand-600" size={48} />
+                    )}
+                    {isUploadingAvatar && (
+                      <div className="absolute inset-0 bg-black/40 flex items-center justify-center">
+                        <CoolLoader size={32} />
+                      </div>
+                    )}
+                  </div>
+                  <button 
+                    onClick={() => avatarInputRef.current?.click()}
+                    disabled={isUploadingAvatar}
+                    className="absolute -bottom-2 -right-2 p-3 bg-brand-600 text-white rounded-2xl shadow-lg border-4 border-white hover:scale-110 transition-all disabled:opacity-50 z-10"
+                  >
+                    <Camera size={18} />
+                  </button>
+                  <input 
+                    type="file"
+                    ref={avatarInputRef}
+                    onChange={handleAvatarUpload}
+                    accept="image/*"
+                    className="hidden"
+                  />
                 </div>
-                <button 
-                  onClick={() => avatarInputRef.current?.click()}
-                  disabled={isUploadingAvatar}
-                  className="absolute bottom-0 right-0 p-3 bg-brand-600 text-white rounded-2xl shadow-lg border-4 border-white hover:scale-110 transition-all disabled:opacity-50"
-                >
-                  <Edit3 size={18} />
-                </button>
-                <input 
-                  type="file"
-                  ref={avatarInputRef}
-                  onChange={handleAvatarUpload}
-                  accept="image/*"
-                  className="hidden"
-                />
+                
+                <div className="flex-1 space-y-2">
+                  <div className="flex flex-col md:flex-row md:items-center gap-2 md:gap-4">
+                    <h2 className="text-3xl font-display font-bold text-dark-surface dark:text-white">
+                      {profile?.displayName}
+                    </h2>
+                    <span className="px-4 py-1 bg-brand-100 dark:bg-brand-900/30 text-brand-600 dark:text-brand-400 text-xs font-bold rounded-full uppercase tracking-widest w-fit mx-auto md:mx-0">
+                      {profile?.role}
+                    </span>
+                  </div>
+                  <p className="text-slate-500 dark:text-slate-400 font-medium">
+                    Member since {profile?.createdAt ? format(new Date(profile.createdAt), 'MMMM yyyy') : '...'}
+                  </p>
+                  <div className="pt-4 flex flex-wrap justify-center md:justify-start gap-4">
+                    <button 
+                      onClick={() => setIsEditingProfile(true)}
+                      className="px-6 py-2.5 bg-brand-600 text-white rounded-2xl font-bold flex items-center gap-2 hover:bg-brand-700 transition-all shadow-lg shadow-brand-200"
+                    >
+                      <Edit3 size={18} />
+                      Edit Profile
+                    </button>
+                    <button 
+                      onClick={() => setActiveTab('my-resources')}
+                      className="px-6 py-2.5 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-2xl font-bold flex items-center gap-2 hover:bg-slate-50 dark:hover:bg-slate-700 transition-all"
+                    >
+                      <Package size={18} />
+                      My Resources
+                    </button>
+                  </div>
+                </div>
               </div>
-              <div>
-                <h2 className="text-2xl font-display font-bold text-dark-surface dark:text-white">{profile?.displayName}</h2>
-                <p className="text-slate-500 font-medium capitalize">{profile?.role} Account</p>
+            </div>
+
+            {/* Daily Motivation */}
+            <div className="glass-panel p-8 rounded-[3rem] bg-gradient-to-br from-brand-600 to-brand-800 text-white relative overflow-hidden shadow-2xl shadow-brand-200">
+              <Quote className="absolute top-4 right-4 text-white/10" size={120} />
+              <div className="relative space-y-6">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center backdrop-blur-md">
+                    <Zap size={20} />
+                  </div>
+                  <h3 className="text-sm font-bold uppercase tracking-[0.2em] text-white/80">Daily Motivation</h3>
+                </div>
+                <blockquote className="text-xl md:text-2xl font-display font-medium leading-relaxed italic">
+                  "{profile?.dailyMotivation || 'Your potential is limitless. Keep pushing boundaries.'}"
+                </blockquote>
+                <div className="flex items-center gap-2 text-sm font-bold text-white/60">
+                  <div className="w-8 h-1 bg-white/30 rounded-full" />
+                  <span>From HarMoTech Ventures Company</span>
+                </div>
               </div>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+              {/* Personal Info */}
               <div className="space-y-4">
                 <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Personal Information</h3>
-                <div className="glass-panel p-6 rounded-[2.5rem] space-y-6">
-                  <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-400">
-                      <Mail size={20} />
+                <div className="glass-panel p-8 rounded-[3rem] space-y-6">
+                  <div className="flex items-center gap-5">
+                    <div className="w-14 h-14 bg-slate-50 dark:bg-slate-800 rounded-2xl flex items-center justify-center text-slate-400">
+                      <Mail size={24} />
                     </div>
                     <div className="flex-1">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Email Address</p>
-                      <p className="font-bold text-dark-surface dark:text-white">{profile?.email}</p>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Email Address</p>
+                      <p className="font-bold text-dark-surface dark:text-white text-lg">{profile?.email}</p>
                     </div>
                   </div>
                   
-                  <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-400">
-                      <Phone size={20} />
+                  <div className="flex items-center gap-5">
+                    <div className="w-14 h-14 bg-slate-50 dark:bg-slate-800 rounded-2xl flex items-center justify-center text-slate-400">
+                      <Phone size={24} />
                     </div>
                     <div className="flex-1">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Phone Number</p>
-                      <p className="font-bold text-dark-surface dark:text-white">{profile?.phoneNumber || 'Not provided'}</p>
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Phone Number</p>
+                      <p className="font-bold text-dark-surface dark:text-white text-lg">{profile?.phoneNumber || 'Not provided'}</p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-5">
+                    <div className="w-14 h-14 bg-slate-50 dark:bg-slate-800 rounded-2xl flex items-center justify-center text-slate-400">
+                      <Shield size={24} />
+                    </div>
+                    <div className="flex-1">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Account Status</p>
+                      <div className="flex items-center gap-2">
+                        <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                        <p className="font-bold text-dark-surface dark:text-white text-lg capitalize">{profile?.status}</p>
+                      </div>
                     </div>
                   </div>
                 </div>
               </div>
 
+              {/* Preferences & Actions */}
               <div className="space-y-4">
-                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Account Actions</h3>
-                <div className="glass-panel p-6 rounded-[2.5rem] space-y-4">
-                  <button 
-                    onClick={() => setActiveTab('my-resources')}
-                    className="w-full py-5 bg-brand-600 text-white rounded-[2rem] font-bold transition-all flex items-center justify-center gap-3 shadow-lg shadow-brand-200"
-                  >
-                    <Package size={20} />
-                    My Resources
-                  </button>
+                <h3 className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Preferences</h3>
+                <div className="glass-panel p-8 rounded-[3rem] space-y-4">
                   <button 
                     onClick={() => setTheme(prev => prev === 'light' ? 'dark' : 'light')}
-                    className="w-full py-5 bg-brand-50 text-brand-600 dark:bg-brand-900/20 dark:text-brand-400 rounded-[2rem] font-bold transition-all flex items-center justify-center gap-3 border border-brand-100 dark:border-brand-500/20"
+                    className="w-full p-6 bg-slate-50 dark:bg-slate-800/50 hover:bg-brand-50 dark:hover:bg-brand-900/20 rounded-[2rem] font-bold transition-all flex items-center justify-between group border border-transparent hover:border-brand-100 dark:hover:border-brand-500/20"
                   >
-                    {theme === 'light' ? <Moon size={20} /> : <Sun size={20} />}
-                    Switch to {theme === 'light' ? 'Dark' : 'Light'} Mode
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 bg-white dark:bg-slate-800 rounded-xl flex items-center justify-center text-brand-600 shadow-sm">
+                        {theme === 'light' ? <Moon size={20} /> : <Sun size={20} />}
+                      </div>
+                      <div className="text-left">
+                        <p className="text-sm font-bold text-dark-surface dark:text-white">Appearance</p>
+                        <p className="text-xs text-slate-500">Switch to {theme === 'light' ? 'Dark' : 'Light'} mode</p>
+                      </div>
+                    </div>
+                    <ChevronRight size={20} className="text-slate-300 group-hover:text-brand-600 transition-colors" />
                   </button>
+
                   <button 
                     onClick={() => signOut()}
-                    className="w-full py-5 bg-red-50 text-red-600 dark:bg-red-900/20 dark:text-red-400 rounded-[2rem] font-bold transition-all flex items-center justify-center gap-3 border border-red-100 dark:border-red-500/20"
+                    className="w-full p-6 bg-red-50/50 dark:bg-red-900/10 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-[2rem] font-bold transition-all flex items-center justify-between group border border-transparent hover:border-red-100 dark:hover:border-red-500/20"
                   >
-                    <LogOut size={20} />
-                    Sign Out
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 bg-white dark:bg-slate-800 rounded-xl flex items-center justify-center text-red-600 shadow-sm">
+                        <LogOut size={20} />
+                      </div>
+                      <div className="text-left">
+                        <p className="text-sm font-bold text-red-600">Sign Out</p>
+                        <p className="text-xs text-red-400">Securely exit your account</p>
+                      </div>
+                    </div>
+                    <ChevronRight size={20} className="text-red-200 group-hover:text-red-600 transition-colors" />
                   </button>
                 </div>
               </div>
@@ -2873,7 +3115,7 @@ export default function App() {
                       <div className="flex items-center gap-2">
                         {item.resourceType === 'document' && (
                           <button 
-                            onClick={() => setReadingDoc(item as any)}
+                            onClick={() => handleReadDoc(item as any)}
                             className="px-4 py-2 bg-brand-50 text-brand-600 rounded-xl text-xs font-bold hover:bg-brand-600 hover:text-white transition-all"
                           >
                             Read
@@ -3154,6 +3396,38 @@ export default function App() {
                     ))}
                   </select>
 
+                  <button 
+                    onClick={() => setManageDocsFilter(prev => ({ ...prev, showDuplicates: !prev.showDuplicates }))}
+                    className={cn(
+                      "px-6 py-4 rounded-2xl font-bold text-sm transition-all flex items-center gap-2",
+                      manageDocsFilter.showDuplicates 
+                        ? "bg-red-500 text-white shadow-lg shadow-red-200" 
+                        : "bg-slate-50 dark:bg-slate-800/50 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800"
+                    )}
+                  >
+                    <ShieldAlert size={18} />
+                    {manageDocsFilter.showDuplicates ? "Showing Duplicates" : "Filter Duplicates"}
+                  </button>
+
+                  {manageDocsFilter.showDuplicates && duplicateIds.size > 0 && (
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={() => setSelectedDocIds(Array.from(duplicateIds))}
+                        className="px-6 py-4 bg-red-100 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-2xl font-bold text-sm hover:bg-red-200 dark:hover:bg-red-900/30 transition-all flex items-center gap-2"
+                      >
+                        <CheckSquare size={18} />
+                        Select Redundant
+                      </button>
+                      <button 
+                        onClick={handleDeleteAllDuplicates}
+                        className="px-6 py-4 bg-red-600 text-white rounded-2xl font-bold text-sm hover:bg-red-700 transition-all shadow-lg shadow-red-200 flex items-center gap-2"
+                      >
+                        <Trash2 size={18} />
+                        Delete All Redundant
+                      </button>
+                    </div>
+                  )}
+
                   {selectedDocIds.length > 0 && (
                     <motion.div 
                       initial={{ opacity: 0, x: 20 }}
@@ -3248,7 +3522,14 @@ export default function App() {
                               <FileText size={20} />
                             </div>
                             <div className="min-w-0">
-                              <p className="font-bold text-dark-surface dark:text-white truncate max-w-[200px]">{doc.title}</p>
+                              <div className="flex items-center gap-2">
+                                <p className="font-bold text-dark-surface dark:text-white truncate max-w-[200px]">{doc.title}</p>
+                                {duplicateIds.has(doc.id) && (
+                                  <span className="px-2 py-0.5 bg-red-100 text-red-600 dark:bg-red-900/40 dark:text-red-400 rounded-md text-[8px] font-black uppercase tracking-tighter animate-pulse shrink-0">
+                                    Duplicate
+                                  </span>
+                                )}
+                              </div>
                               <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{doc.type.toUpperCase()}</p>
                             </div>
                           </div>
@@ -3288,7 +3569,7 @@ export default function App() {
                         <td className="px-6 py-5">
                           <div className="flex items-center justify-end gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
                             <button 
-                              onClick={() => setReadingDoc(doc)}
+                              onClick={() => handleReadDoc(doc)}
                               title="Read"
                               className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg text-slate-400 hover:text-brand-600 transition-all"
                             >
@@ -4121,7 +4402,10 @@ export default function App() {
             {/* Search Bar */}
             <div className="px-0">
               <div className="relative group">
-                <Search className="absolute left-6 top-1/2 -translate-y-1/2 text-slate-400 group-focus-within:text-brand-600 transition-colors" size={20} />
+                <Search className={cn(
+                  "absolute left-6 top-1/2 -translate-y-1/2 transition-colors",
+                  isExpandingSearch ? "text-brand-500 animate-pulse" : "text-slate-400 group-focus-within:text-brand-600"
+                )} size={20} />
                 <input 
                   type="text"
                   value={lostFoundSearchQuery}
@@ -4129,6 +4413,14 @@ export default function App() {
                   placeholder="Search for lost or found items, locations..."
                   className="w-full pl-16 pr-6 py-5 bg-white dark:bg-slate-900 border-none rounded-[2rem] shadow-xl shadow-brand-900/5 focus:ring-4 focus:ring-brand-500/10 transition-all text-lg font-medium text-dark-surface dark:text-white"
                 />
+                {lostFoundSearchKeywords.length > 0 && lostFoundSearchQuery.trim() !== '' && (
+                  <div className="absolute right-6 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                    <div className="px-3 py-1.5 bg-brand-50 dark:bg-brand-900/30 text-brand-600 dark:text-brand-400 text-xs font-bold rounded-xl flex items-center gap-2 animate-in fade-in zoom-in">
+                      <Sparkles size={14} />
+                      Smart Search
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -4171,10 +4463,10 @@ export default function App() {
                         </div>
                       </div>
                     </div>
-                    {item.imageUrl && (
+                    {item.imageUrls && item.imageUrls.length > 0 && (
                       <div className="relative aspect-video rounded-2xl overflow-hidden bg-slate-100">
                         <img 
-                          src={item.imageUrl} 
+                          src={item.imageUrls[0]} 
                           alt={item.title}
                           className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
                           referrerPolicy="no-referrer"
@@ -4263,7 +4555,7 @@ export default function App() {
       {/* Add/Edit Modal */}
       <AnimatePresence>
         {isAddModalOpen && (
-          <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-4">
+          <div className="fixed inset-x-0 top-20 bottom-32 z-30 flex items-center justify-center p-4 sm:p-8">
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
@@ -4272,173 +4564,205 @@ export default function App() {
                 setIsAddModalOpen(false);
                 setRestrictToPdf(false);
               }}
-              className="absolute inset-0 bg-dark-surface/60 backdrop-blur-md"
+              className="fixed inset-0 bg-dark-surface/40 backdrop-blur-sm -z-10"
             />
             <motion.div 
-              initial={{ y: "100%" }}
-              animate={{ y: 0 }}
-              exit={{ y: "100%" }}
-              className="relative w-full max-w-lg bg-white rounded-t-[3rem] sm:rounded-[3rem] p-6 sm:p-10 shadow-2xl overflow-y-auto max-h-[90vh]"
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 20, opacity: 0 }}
+              className="relative w-full max-w-4xl h-full bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl rounded-[2.5rem] p-6 sm:p-10 shadow-2xl border border-white/20 dark:border-white/5 overflow-hidden flex flex-col"
             >
               <div className="flex items-center justify-between mb-8">
-                <h2 className="text-2xl sm:text-3xl font-display font-bold text-dark-surface">
+                <h2 className="text-2xl sm:text-3xl font-display font-bold text-dark-surface dark:text-white">
                   {editingDoc ? 'Edit Material' : 'New Material'}
                 </h2>
                 <button onClick={() => {
                   setIsAddModalOpen(false);
                   setRestrictToPdf(false);
-                }} className="p-3 hover:bg-slate-100 rounded-2xl transition-colors">
+                }} className="p-3 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-2xl transition-colors text-slate-400">
                   <X size={24} />
                 </button>
               </div>
 
-              <form onSubmit={handleAddDocument} className="space-y-8">
-                <div className="space-y-3">
-                  <label className="text-sm font-bold text-slate-500 uppercase tracking-widest ml-1">Title</label>
-                  <input 
-                    required={!editingDoc && selectedFiles.length > 1 ? false : true}
-                    disabled={!editingDoc && selectedFiles.length > 1}
-                    type="text"
-                    value={formData.title}
-                    onChange={e => setFormData({...formData, title: e.target.value})}
-                    placeholder={!editingDoc && selectedFiles.length > 1 ? "Titles will be set from filenames" : "Calculus II Notes"}
-                    className="w-full px-6 py-4 bg-slate-50 border-none rounded-2xl focus:ring-4 focus:ring-dark-surface/5 transition-all text-lg disabled:opacity-50"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-6">
-                  <div className="space-y-3">
-                    <label className="text-sm font-bold text-slate-500 uppercase tracking-widest ml-1">Type</label>
-                    <select 
-                      value={formData.type}
-                      disabled={restrictToPdf}
-                      onChange={e => setFormData({...formData, type: e.target.value as 'pdf' | 'docx'})}
-                      className="w-full px-6 py-4 bg-slate-50 border-none rounded-2xl focus:ring-4 focus:ring-dark-surface/5 transition-all disabled:opacity-50"
-                    >
-                      <option value="pdf">PDF</option>
-                      {!restrictToPdf && <option value="docx">DOCX</option>}
-                    </select>
-                  </div>
-                  <div className="space-y-3">
-                    <label className="text-sm font-bold text-slate-500 uppercase tracking-widest ml-1">Category</label>
-                    <input 
-                      required
-                      type="text"
-                      value={formData.category}
-                      onChange={e => setFormData({...formData, category: e.target.value})}
-                      placeholder="Math"
-                      className="w-full px-6 py-4 bg-slate-50 border-none rounded-2xl focus:ring-4 focus:ring-dark-surface/5 transition-all"
-                    />
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  <label className="text-sm font-bold text-slate-500 uppercase tracking-widest ml-1">Document File(s)</label>
-                  <div className="relative">
-                    <input 
-                      type="file"
-                      accept={restrictToPdf ? ".pdf" : ".pdf,.docx"}
-                      multiple={!editingDoc}
-                      onChange={e => {
-                        const files = Array.from(e.target.files || []);
-                        if (files.length > 0) {
-                          setSelectedFiles(files);
-                          
-                          // If single file, auto-fill title
-                          if (files.length === 1) {
-                            const file = files[0] as File;
-                            setFormData(prev => ({
-                              ...prev, 
-                              title: file.name.split('.')[0],
-                              type: (file.name.split('.').pop()?.toLowerCase() === 'docx' ? 'docx' : 'pdf') as 'pdf' | 'docx'
-                            }));
-                          } else {
-                            // Multiple files: clear title as it will be automatic
-                            setFormData(prev => ({...prev, title: ''}));
-                          }
-                        }
-                      }}
-                      className="hidden"
-                      id="file-upload"
-                    />
-                    <label 
-                      htmlFor="file-upload"
-                      className="flex flex-col items-center justify-center w-full px-6 py-10 bg-slate-50 border-2 border-dashed border-slate-200 rounded-3xl cursor-pointer hover:bg-slate-100 hover:border-brand-300 transition-all group"
-                    >
-                      {selectedFiles.length > 0 ? (
-                        <div className="space-y-4 w-full">
-                          <div className="flex items-center justify-center gap-3 text-brand-600">
-                            <FileText size={32} />
-                            <span className="font-bold text-lg">{selectedFiles.length} file(s) selected</span>
-                          </div>
-                          <div className="max-h-32 overflow-y-auto space-y-2 px-4">
-                            {selectedFiles.map((file, idx) => (
-                              <div key={idx} className="flex items-center justify-between bg-white dark:bg-slate-800 p-2 rounded-xl border border-slate-100 dark:border-slate-700">
-                                <span className="text-xs font-medium text-slate-600 dark:text-slate-300 truncate max-w-[200px]">{file.name}</span>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-[10px] text-slate-400">{(file.size / 1024 / 1024).toFixed(2)} MB</span>
-                                  {!isUploading && (
-                                    <button 
-                                      type="button"
-                                      onClick={(e) => {
-                                        e.preventDefault();
-                                        e.stopPropagation();
-                                        setSelectedFiles(prev => prev.filter((_, i) => i !== idx));
-                                      }}
-                                      className="p-1 hover:bg-red-50 text-slate-400 hover:text-red-600 rounded-lg transition-all"
-                                    >
-                                      <X size={14} />
-                                    </button>
-                                  )}
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-                      ) : (
-                        <>
-                          <div className="w-16 h-16 bg-white rounded-2xl flex items-center justify-center shadow-sm mb-4 group-hover:scale-110 transition-transform">
-                            <Plus className="text-brand-600" size={32} />
-                          </div>
-                          <p className="font-bold text-dark-surface">Choose file(s)</p>
-                          <p className="text-sm text-slate-400">{restrictToPdf ? "PDF only" : "PDF or DOCX"} up to 10MB each</p>
-                        </>
-                      )}
-                    </label>
-                  </div>
-                  {editingDoc && selectedFiles.length === 0 && (
-                    <p className="text-xs text-slate-400 ml-1 italic">Leave empty to keep existing file</p>
-                  )}
-                </div>
-
-                {!isAdmin && (
-                  <div className="p-4 bg-amber-50 border border-amber-100 rounded-2xl flex items-start gap-3">
-                    <ShieldAlert className="text-amber-600 shrink-0" size={18} />
-                    <p className="text-xs text-amber-800 font-medium leading-relaxed">
-                      Your submission will be reviewed by an administrator before it becomes visible to other users.
-                    </p>
-                  </div>
-                )}
-
-                <button 
-                  type="submit"
-                  disabled={isUploading}
-                  className="w-full py-5 bg-dark-surface hover:bg-black disabled:bg-slate-400 text-white rounded-[2rem] font-bold transition-all shadow-xl flex items-center justify-center gap-3 text-lg"
-                >
-                  {isUploading ? (
-                    <div className="flex items-center gap-3">
-                      <CoolLoader size={32} />
-                      <span className="font-display">
-                        {uploadProgress ? `Uploading ${uploadProgress.current}/${uploadProgress.total}` : 'Uploading...'}
-                      </span>
+              <form onSubmit={handleAddDocument} className="space-y-8 flex-1 overflow-y-auto px-1 pb-20 sm:pb-0">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div className="space-y-8">
+                    <div className="space-y-3">
+                      <label className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest ml-1">Title</label>
+                      <input 
+                        required={!editingDoc && selectedFiles.length > 1 ? false : true}
+                        disabled={!editingDoc && selectedFiles.length > 1}
+                        type="text"
+                        value={formData.title}
+                        onChange={e => setFormData({...formData, title: e.target.value})}
+                        placeholder={!editingDoc && selectedFiles.length > 1 ? "Titles will be set from filenames" : "Calculus II Notes"}
+                        className="w-full px-6 py-4 bg-slate-50 dark:bg-slate-800 border-none rounded-2xl focus:ring-4 focus:ring-dark-surface/5 transition-all text-lg disabled:opacity-50 dark:text-white dark:placeholder-slate-600"
+                      />
                     </div>
-                  ) : (
-                    <>
-                      {editingDoc ? <Edit3 size={24} /> : <Plus size={24} />}
-                      {editingDoc ? 'Update' : 'Publish'}
-                    </>
-                  )}
-                </button>
+
+                    <div className="grid grid-cols-2 gap-6">
+                      <div className="space-y-3">
+                        <label className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest ml-1">Type</label>
+                        <select 
+                          value={formData.type}
+                          disabled={restrictToPdf}
+                          onChange={e => setFormData({...formData, type: e.target.value as 'pdf' | 'docx'})}
+                          className="w-full px-6 py-4 bg-slate-50 dark:bg-slate-800 border-none rounded-2xl focus:ring-4 focus:ring-dark-surface/5 transition-all disabled:opacity-50 dark:text-white"
+                        >
+                          <option value="pdf">PDF</option>
+                          {!restrictToPdf && <option value="docx">DOCX</option>}
+                        </select>
+                      </div>
+                      <div className="space-y-3">
+                        <label className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest ml-1">Category</label>
+                        <input 
+                          required
+                          type="text"
+                          value={formData.category}
+                          onChange={e => setFormData({...formData, category: e.target.value})}
+                          placeholder="Math"
+                          className="w-full px-6 py-4 bg-slate-50 dark:bg-slate-800 border-none rounded-2xl focus:ring-4 focus:ring-dark-surface/5 transition-all dark:text-white dark:placeholder-slate-600"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="space-y-8">
+                    <div className="space-y-3">
+                      <div className="flex items-center justify-between">
+                        <label className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest ml-1">Document File(s)</label>
+                        {selectedFiles.some(f => documents.some(d => d.title.toLowerCase().trim() === f.name.split('.')[0].toLowerCase().trim())) && (
+                          <button 
+                            type="button"
+                            onClick={() => {
+                              setSelectedFiles(prev => prev.filter(f => !documents.some(d => d.title.toLowerCase().trim() === f.name.split('.')[0].toLowerCase().trim())));
+                            }}
+                            className="text-[10px] font-bold text-red-500 hover:text-red-600 transition-colors flex items-center gap-1"
+                          >
+                            <Trash2 size={12} />
+                            Remove All Duplicates
+                          </button>
+                        )}
+                      </div>
+                      <div className="relative">
+                        <input 
+                          type="file"
+                          accept={restrictToPdf ? ".pdf" : ".pdf,.docx"}
+                          multiple={!editingDoc}
+                          onChange={e => {
+                            const files = Array.from(e.target.files || []);
+                            if (files.length > 0) {
+                              setSelectedFiles(files);
+                              
+                              // If single file, auto-fill title
+                              if (files.length === 1) {
+                                const file = files[0] as File;
+                                setFormData(prev => ({
+                                  ...prev, 
+                                  title: file.name.split('.')[0],
+                                  type: (file.name.split('.').pop()?.toLowerCase() === 'docx' ? 'docx' : 'pdf') as 'pdf' | 'docx'
+                                }));
+                              } else {
+                                // Multiple files: clear title as it will be automatic
+                                setFormData(prev => ({...prev, title: ''}));
+                              }
+                            }
+                          }}
+                          className="hidden"
+                          id="file-upload"
+                        />
+                        <label 
+                          htmlFor="file-upload"
+                          className="flex flex-col items-center justify-center w-full px-6 py-10 bg-slate-50 dark:bg-slate-800 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-3xl cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 hover:border-brand-300 transition-all group"
+                        >
+                          {selectedFiles.length > 0 ? (
+                            <div className="space-y-4 w-full">
+                              <div className="flex items-center justify-center gap-3 text-brand-600 dark:text-brand-400">
+                                <FileText size={32} />
+                                <span className="font-bold text-lg">{selectedFiles.length} file(s) selected</span>
+                              </div>
+                              <div className="max-h-48 overflow-y-auto space-y-2 px-4">
+                                {selectedFiles.map((file, idx) => {
+                                  const isDuplicate = documents.some(d => d.title.toLowerCase().trim() === file.name.split('.')[0].toLowerCase().trim());
+                                  return (
+                                    <div key={idx} className={cn(
+                                      "flex items-center justify-between p-2 rounded-xl border transition-all",
+                                      isDuplicate 
+                                        ? "bg-red-50 dark:bg-red-900/10 border-red-100 dark:border-red-900/30" 
+                                        : "bg-white dark:bg-slate-800 border-slate-100 dark:border-slate-700"
+                                    )}>
+                                      <div className="flex flex-col min-w-0">
+                                        <span className={cn(
+                                          "text-xs font-medium truncate max-w-[200px]",
+                                          isDuplicate ? "text-red-600 dark:text-red-400" : "text-slate-600 dark:text-slate-300"
+                                        )}>{file.name}</span>
+                                        {isDuplicate && (
+                                          <span className="text-[8px] font-bold text-red-500 uppercase tracking-widest">Already Exists</span>
+                                        )}
+                                      </div>
+                                      <div className="flex items-center gap-2">
+                                        <span className="text-[10px] text-slate-400">{(file.size / 1024 / 1024).toFixed(2)} MB</span>
+                                        {!isUploading && (
+                                          <button 
+                                            type="button"
+                                            onClick={(e) => {
+                                              e.preventDefault();
+                                              setSelectedFiles(prev => prev.filter((_, i) => i !== idx));
+                                            }}
+                                            className="p-1 hover:bg-red-50 dark:hover:bg-red-900/20 text-red-500 rounded-lg transition-colors"
+                                          >
+                                            <X size={14} />
+                                          </button>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <div className="w-16 h-16 bg-white dark:bg-slate-700 rounded-2xl flex items-center justify-center text-slate-400 group-hover:text-brand-500 transition-all mb-4 shadow-sm">
+                                <UploadCloud size={32} />
+                              </div>
+                              <div className="text-center">
+                                <p className="text-lg font-bold text-slate-700 dark:text-slate-200">Click or drag files to upload</p>
+                                <p className="text-sm text-slate-400 mt-1">PDF or DOCX up to 50MB</p>
+                              </div>
+                            </>
+                          )}
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex gap-4 pt-4">
+                  <button 
+                    type="button"
+                    onClick={() => {
+                      setIsAddModalOpen(false);
+                      setRestrictToPdf(false);
+                    }}
+                    className="flex-1 px-8 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold rounded-2xl hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="submit"
+                    disabled={isUploading || (selectedFiles.length === 0 && !editingDoc)}
+                    className="flex-[2] px-8 py-4 bg-brand-600 text-white font-bold rounded-2xl shadow-lg shadow-brand-200 dark:shadow-none hover:bg-brand-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
+                  >
+                    {isUploading ? (
+                      <>
+                        <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        <span>Uploading...</span>
+                      </>
+                    ) : (
+                      <span>{editingDoc ? 'Update Material' : 'Upload Material'}</span>
+                    )}
+                  </button>
+                </div>
               </form>
             </motion.div>
           </div>
@@ -4492,7 +4816,10 @@ export default function App() {
                             src={url} 
                             alt={`${previewBusiness.title} - ${idx + 1}`}
                             className="max-w-full max-h-full object-contain cursor-pointer"
-                            onClick={() => setFullscreenImage(url)}
+                            onClick={() => {
+                              setFullscreenImages(previewBusiness.imageUrls);
+                              setFullscreenIndex(idx);
+                            }}
                             referrerPolicy="no-referrer"
                           />
                         </div>
@@ -4506,7 +4833,10 @@ export default function App() {
 
                   {previewBusiness.imageUrls.length > 0 && (
                     <button 
-                      onClick={() => setFullscreenImage(previewBusiness.imageUrls[currentImageIndex])}
+                      onClick={() => {
+                        setFullscreenImages(previewBusiness.imageUrls);
+                        setFullscreenIndex(currentImageIndex);
+                      }}
                       className="absolute top-4 right-4 p-3 bg-white/10 hover:bg-white/20 backdrop-blur-md rounded-2xl text-white transition-all opacity-0 group-hover:opacity-100 shadow-xl"
                     >
                       <Maximize2 size={20} />
@@ -4548,24 +4878,28 @@ export default function App() {
                   )}
                 </div>
 
-                {/* Description */}
+                {/* Details */}
                 <div className="space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h4 className="text-lg font-bold text-dark-surface dark:text-white">Description</h4>
-                    <div className="flex items-center gap-4">
-                      <div className="flex items-center gap-1.5 text-slate-500 bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-xl">
-                        <Eye size={16} />
-                        <span className="text-sm font-bold">{previewBusiness.viewedBy?.length || 0} Views</span>
-                      </div>
-                      <div className="flex items-center gap-2 text-slate-500">
-                        <MapPin size={16} />
-                        <span className="text-sm font-medium">{previewBusiness.location}</span>
-                      </div>
+                  <div className="flex flex-wrap items-center gap-4">
+                    <div className="flex items-center gap-2 text-slate-500 bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-xl">
+                      <MapPin size={16} />
+                      <span className="text-sm font-bold">{previewBusiness.location}</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-slate-500 bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-xl">
+                      <Tag size={16} />
+                      <span className="text-sm font-bold">{previewBusiness.price || 'Contact for Price'}</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-slate-500 bg-slate-100 dark:bg-slate-800 px-3 py-1.5 rounded-xl">
+                      <Eye size={16} />
+                      <span className="text-sm font-bold">{previewBusiness.viewedBy?.length || 0} Views</span>
                     </div>
                   </div>
-                  <p className="text-slate-600 dark:text-slate-400 leading-relaxed whitespace-pre-wrap">
-                    {previewBusiness.description}
-                  </p>
+                  <div className="space-y-2">
+                    <h4 className="text-lg font-bold text-dark-surface dark:text-white">Description</h4>
+                    <p className="text-slate-600 dark:text-slate-400 leading-relaxed whitespace-pre-wrap">
+                      {previewBusiness.description}
+                    </p>
+                  </div>
                 </div>
 
                 {/* Seller Info */}
@@ -4639,25 +4973,77 @@ export default function App() {
 
               {/* Modal Content */}
               <div className="flex-1 overflow-y-auto p-4 sm:p-8 space-y-6">
-                {/* Image */}
-                {previewLostFound.imageUrl ? (
-                  <div className="relative aspect-video rounded-[2rem] overflow-hidden bg-slate-100 dark:bg-slate-800 group cursor-pointer" onClick={() => setFullscreenImage(previewLostFound.imageUrl!)}>
-                    <img 
-                      src={previewLostFound.imageUrl} 
-                      alt={previewLostFound.title}
-                      className="w-full h-full object-cover"
-                      referrerPolicy="no-referrer"
-                    />
-                    <div className="absolute inset-0 bg-black/20 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                      <Maximize2 className="text-white" size={32} />
+                {/* Image Carousel */}
+                <div className="relative aspect-video rounded-[2rem] overflow-hidden bg-slate-900 group">
+                  {previewLostFound.imageUrls && previewLostFound.imageUrls.length > 0 ? (
+                    <div className="w-full h-full flex transition-transform duration-500 ease-out" style={{ transform: `translateX(-${currentImageIndex * 100}%)` }}>
+                      {previewLostFound.imageUrls.map((url, idx) => (
+                        <div key={idx} className="w-full h-full shrink-0 flex items-center justify-center bg-slate-900">
+                          <img 
+                            src={url} 
+                            alt={`${previewLostFound.title} - ${idx + 1}`}
+                            className="max-w-full max-h-full object-contain cursor-pointer"
+                            onClick={() => {
+                              setFullscreenImages(previewLostFound.imageUrls);
+                              setFullscreenIndex(idx);
+                            }}
+                            referrerPolicy="no-referrer"
+                          />
+                        </div>
+                      ))}
                     </div>
-                  </div>
-                ) : (
-                  <div className="aspect-video rounded-[2rem] bg-slate-50 dark:bg-slate-800/50 flex flex-col items-center justify-center text-slate-300 dark:text-slate-700 space-y-4">
-                    <ImageIcon size={64} />
-                    <p className="font-medium">No image provided</p>
-                  </div>
-                )}
+                  ) : (
+                    <div className="w-full h-full flex items-center justify-center text-slate-700">
+                      <ImageIcon size={64} />
+                    </div>
+                  )}
+
+                  {previewLostFound.imageUrls && previewLostFound.imageUrls.length > 0 && (
+                    <button 
+                      onClick={() => {
+                        setFullscreenImages(previewLostFound.imageUrls);
+                        setFullscreenIndex(currentImageIndex);
+                      }}
+                      className="absolute top-4 right-4 p-3 bg-white/10 hover:bg-white/20 backdrop-blur-md rounded-2xl text-white transition-all opacity-0 group-hover:opacity-100 shadow-xl"
+                    >
+                      <Maximize2 size={20} />
+                    </button>
+                  )}
+
+                  {previewLostFound.imageUrls && previewLostFound.imageUrls.length > 1 && (
+                    <>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setCurrentImageIndex(prev => prev === 0 ? previewLostFound.imageUrls.length - 1 : prev - 1);
+                        }}
+                        className="absolute left-4 top-1/2 -translate-y-1/2 p-3 bg-white/80 backdrop-blur-md rounded-full shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <ChevronLeft size={20} />
+                      </button>
+                      <button 
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setCurrentImageIndex(prev => prev === previewLostFound.imageUrls.length - 1 ? 0 : prev + 1);
+                        }}
+                        className="absolute right-4 top-1/2 -translate-y-1/2 p-3 bg-white/80 backdrop-blur-md rounded-full shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <ChevronRight size={20} />
+                      </button>
+                      <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-2">
+                        {previewLostFound.imageUrls.map((_, idx) => (
+                          <div 
+                            key={idx}
+                            className={cn(
+                              "w-2 h-2 rounded-full transition-all",
+                              currentImageIndex === idx ? "bg-white w-6" : "bg-white/50"
+                            )}
+                          />
+                        ))}
+                      </div>
+                    </>
+                  )}
+                </div>
 
                 {/* Details */}
                 <div className="space-y-4">
@@ -4717,186 +5103,195 @@ export default function App() {
       {/* Business Listing Modal */}
       <AnimatePresence>
         {isBusinessModalOpen && (
-          <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-4">
+          <div className="fixed inset-x-0 top-20 bottom-32 z-30 flex items-center justify-center p-4 sm:p-8">
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setIsBusinessModalOpen(false)}
-              className="absolute inset-0 bg-dark-surface/60 backdrop-blur-sm"
+              className="fixed inset-0 bg-dark-surface/40 backdrop-blur-sm -z-10"
             />
             <motion.div 
-              initial={{ y: "100%" }}
-              animate={{ y: 0 }}
-              exit={{ y: "100%" }}
-              className="relative w-full max-w-lg bg-white rounded-t-[3rem] sm:rounded-[3rem] p-6 sm:p-10 shadow-2xl overflow-hidden"
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 20, opacity: 0 }}
+              className="relative w-full max-w-4xl h-full bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl rounded-[2.5rem] p-6 sm:p-10 shadow-2xl border border-white/20 dark:border-white/5 overflow-hidden flex flex-col"
             >
               <div className="flex items-center justify-between mb-8">
                 <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center">
+                  <div className="w-12 h-12 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 rounded-2xl flex items-center justify-center">
                     <Store size={24} />
                   </div>
                   <div>
-                    <h2 className="text-2xl font-display font-bold text-dark-surface">
+                    <h2 className="text-2xl font-display font-bold text-dark-surface dark:text-white">
                       {editingBusiness ? 'Edit Listing' : 'Add Listing'}
                     </h2>
-                    <p className="text-slate-400 text-sm">Advertise your business</p>
+                    <p className="text-slate-400 dark:text-slate-500 text-sm">Advertise your business</p>
                   </div>
                 </div>
                 <button 
                   onClick={() => setIsBusinessModalOpen(false)}
-                  className="p-3 hover:bg-slate-100 rounded-2xl transition-colors text-slate-400"
+                  className="p-3 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-2xl transition-colors text-slate-400"
                 >
                   <X size={24} />
                 </button>
               </div>
 
-              <form onSubmit={handleAddBusiness} className="space-y-6 max-h-[60vh] overflow-y-auto px-1">
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Business/Item Title</label>
-                  <input 
-                    required
-                    type="text"
-                    value={businessFormData.title}
-                    onChange={e => setBusinessFormData({...businessFormData, title: e.target.value})}
-                    placeholder="e.g. HarMoTech Web Services"
-                    className="w-full px-6 py-4 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-indigo-500 transition-all"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Price (Optional)</label>
-                    <div className="relative">
-                      <DollarSign className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                      <input 
-                        type="text"
-                        value={businessFormData.price}
-                        onChange={e => setBusinessFormData({...businessFormData, price: e.target.value})}
-                        placeholder="e.g. $50 or Negotiable"
-                        className="w-full pl-12 pr-6 py-4 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-indigo-500 transition-all"
-                      />
-                    </div>
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Category</label>
-                    <div className="relative">
-                      <Tag className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                      <select 
-                        value={businessFormData.category}
-                        onChange={e => setBusinessFormData({...businessFormData, category: e.target.value})}
-                        className="w-full pl-12 pr-6 py-4 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-indigo-500 transition-all appearance-none"
-                      >
-                        <option value="General">General</option>
-                        <option value="Services">Services</option>
-                        <option value="Electronics">Electronics</option>
-                        <option value="Food">Food</option>
-                        <option value="Fashion">Fashion</option>
-                        <option value="Education">Education</option>
-                      </select>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Description</label>
-                  <textarea 
-                    required
-                    value={businessFormData.description}
-                    onChange={e => setBusinessFormData({...businessFormData, description: e.target.value})}
-                    placeholder="Describe your business or item..."
-                    className="w-full px-6 py-4 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-indigo-500 transition-all min-h-[120px] resize-none"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Location</label>
-                    <div className="relative">
-                      <MapPin className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+              <form onSubmit={handleAddBusiness} className="space-y-6 flex-1 overflow-y-auto px-1 pb-20 sm:pb-0">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                  <div className="space-y-6">
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">Business/Item Title</label>
                       <input 
                         required
                         type="text"
-                        value={businessFormData.location}
-                        onChange={e => setBusinessFormData({...businessFormData, location: e.target.value})}
-                        placeholder="e.g. Main Campus"
-                        className="w-full pl-12 pr-6 py-4 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-indigo-500 transition-all"
+                        value={businessFormData.title}
+                        onChange={e => setBusinessFormData({...businessFormData, title: e.target.value})}
+                        placeholder="e.g. HarMoTech Web Services"
+                        className="w-full px-6 py-4 bg-slate-50 dark:bg-slate-800 border-none rounded-2xl focus:ring-2 focus:ring-indigo-500 transition-all dark:text-white dark:placeholder-slate-600"
                       />
                     </div>
-                  </div>
-                  <div className="space-y-2">
-                    <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Contact Phone</label>
-                    <div className="relative">
-                      <Phone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                      <input 
-                        required
-                        type="tel"
-                        value={businessFormData.contactPhone}
-                        onChange={e => setBusinessFormData({...businessFormData, contactPhone: e.target.value})}
-                        placeholder="e.g. +123456789"
-                        className="w-full pl-12 pr-6 py-4 bg-slate-50 border-none rounded-2xl focus:ring-2 focus:ring-indigo-500 transition-all"
-                      />
-                    </div>
-                  </div>
-                </div>
 
-                <div className="space-y-2">
-                  <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Images (1-2)</label>
-                  <div className="grid grid-cols-2 gap-3">
-                    <label className="aspect-square bg-slate-50 rounded-2xl border-2 border-dashed border-slate-200 flex flex-col items-center justify-center cursor-pointer hover:bg-slate-100 transition-all">
-                      <ImageIcon className="text-slate-400 mb-1" size={20} />
-                      <span className="text-[10px] font-bold text-slate-400">Add</span>
-                      <input 
-                        type="file" 
-                        accept="image/*" 
-                        multiple
-                        className="hidden" 
-                        onChange={(e) => {
-                          if (e.target.files) {
-                            const files = Array.from(e.target.files).slice(0, 2);
-                            setSelectedBusinessImages(files);
-                          }
-                        }}
-                      />
-                    </label>
-                    {selectedBusinessImages.map((file, i) => (
-                      <div key={i} className="aspect-square bg-slate-100 rounded-2xl overflow-hidden relative">
-                        <img 
-                          src={URL.createObjectURL(file)} 
-                          alt="Preview" 
-                          className="w-full h-full object-cover" 
-                        />
-                        <button 
-                          type="button"
-                          onClick={() => setSelectedBusinessImages(selectedBusinessImages.filter((_, idx) => idx !== i))}
-                          className="absolute top-1 right-1 p-1 bg-red-500 text-white rounded-full shadow-lg"
-                        >
-                          <X size={12} />
-                        </button>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">Price (Optional)</label>
+                        <div className="relative">
+                          <DollarSign className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                          <input 
+                            type="text"
+                            value={businessFormData.price}
+                            onChange={e => setBusinessFormData({...businessFormData, price: e.target.value})}
+                            placeholder="e.g. $50"
+                            className="w-full pl-12 pr-6 py-4 bg-slate-50 dark:bg-slate-800 border-none rounded-2xl focus:ring-2 focus:ring-indigo-500 transition-all dark:text-white dark:placeholder-slate-600"
+                          />
+                        </div>
                       </div>
-                    ))}
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">Category</label>
+                        <div className="relative">
+                          <Tag className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                          <select 
+                            value={businessFormData.category}
+                            onChange={e => setBusinessFormData({...businessFormData, category: e.target.value})}
+                            className="w-full pl-12 pr-6 py-4 bg-slate-50 dark:bg-slate-800 border-none rounded-2xl focus:ring-2 focus:ring-indigo-500 transition-all appearance-none dark:text-white"
+                          >
+                            <option value="General">General</option>
+                            <option value="Services">Services</option>
+                            <option value="Electronics">Electronics</option>
+                            <option value="Food">Food</option>
+                            <option value="Fashion">Fashion</option>
+                            <option value="Education">Education</option>
+                          </select>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">Location</label>
+                      <div className="relative">
+                        <MapPin className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                        <input 
+                          required
+                          type="text"
+                          value={businessFormData.location}
+                          onChange={e => setBusinessFormData({...businessFormData, location: e.target.value})}
+                          placeholder="e.g. Main Campus"
+                          className="w-full pl-12 pr-6 py-4 bg-slate-50 dark:bg-slate-800 border-none rounded-2xl focus:ring-2 focus:ring-indigo-500 transition-all dark:text-white dark:placeholder-slate-600"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">Contact Phone</label>
+                      <div className="relative">
+                        <Phone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                        <input 
+                          required
+                          type="tel"
+                          value={businessFormData.contactPhone}
+                          onChange={e => setBusinessFormData({...businessFormData, contactPhone: e.target.value})}
+                          placeholder="e.g. +123456789"
+                          className="w-full pl-12 pr-6 py-4 bg-slate-50 dark:bg-slate-800 border-none rounded-2xl focus:ring-2 focus:ring-indigo-500 transition-all dark:text-white dark:placeholder-slate-600"
+                        />
+                      </div>
+                    </div>
                   </div>
-                  <p className="text-[10px] text-slate-400 font-medium italic">Max 2 images. First image will be the cover.</p>
+
+                  <div className="space-y-6">
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">Description</label>
+                      <textarea 
+                        required
+                        value={businessFormData.description}
+                        onChange={e => setBusinessFormData({...businessFormData, description: e.target.value})}
+                        placeholder="Describe your business or item..."
+                        className="w-full px-6 py-4 bg-slate-50 dark:bg-slate-800 border-none rounded-2xl focus:ring-2 focus:ring-indigo-500 transition-all min-h-[150px] resize-none dark:text-white dark:placeholder-slate-600"
+                      />
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest ml-1">Images (Up to 5)</label>
+                      <div className="grid grid-cols-3 gap-3">
+                        <label className="aspect-square bg-slate-50 dark:bg-slate-800 rounded-2xl border-2 border-dashed border-slate-200 dark:border-slate-700 flex flex-col items-center justify-center cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 transition-all">
+                          <ImageIcon className="text-slate-400" size={24} />
+                          <span className="text-[10px] font-bold text-slate-400 mt-1">Add</span>
+                          <input 
+                            type="file" 
+                            accept="image/*" 
+                            multiple
+                            className="hidden" 
+                            onChange={(e) => {
+                              if (e.target.files) {
+                                const files = Array.from(e.target.files).slice(0, 5);
+                                setSelectedBusinessImages(prev => [...prev, ...files].slice(0, 5));
+                              }
+                            }}
+                          />
+                        </label>
+                        {selectedBusinessImages.map((file, i) => (
+                          <div key={i} className="aspect-square bg-slate-100 dark:bg-slate-800 rounded-2xl overflow-hidden relative group">
+                            <img 
+                              src={URL.createObjectURL(file)} 
+                              alt="Preview" 
+                              className="w-full h-full object-cover" 
+                            />
+                            <button 
+                              type="button"
+                              onClick={() => setSelectedBusinessImages(selectedBusinessImages.filter((_, idx) => idx !== i))}
+                              className="absolute top-1 right-1 p-1.5 bg-red-500 text-white rounded-full shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                            >
+                              <X size={14} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-[10px] text-slate-400 dark:text-slate-500 font-medium italic">Max 2 images. First image will be the cover.</p>
+                    </div>
+                  </div>
                 </div>
 
-                <div className="pt-4">
+                <div className="flex gap-4 pt-4">
                   <button 
-                    disabled={isUploadingBusiness}
+                    type="button"
+                    onClick={() => setIsBusinessModalOpen(false)}
+                    className="flex-1 px-8 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold rounded-2xl hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button 
                     type="submit"
-                    className="w-full py-5 bg-indigo-600 text-white rounded-[2rem] font-bold shadow-xl shadow-indigo-200 hover:scale-[1.02] transition-all disabled:opacity-50 disabled:hover:scale-100 flex items-center justify-center gap-2"
+                    disabled={isUploadingBusiness}
+                    className="flex-[2] px-8 py-4 bg-indigo-600 text-white font-bold rounded-2xl shadow-lg shadow-indigo-200 dark:shadow-none hover:bg-indigo-700 transition-all disabled:opacity-50 flex items-center justify-center gap-2"
                   >
                     {isUploadingBusiness ? (
                       <CoolLoader size={32} />
                     ) : (
                       <>
                         <CheckCircle size={20} />
-                        {editingBusiness ? 'Update Listing' : 'Submit for Approval'}
+                        <span>{editingBusiness ? 'Update Listing' : 'Post Listing'}</span>
                       </>
                     )}
                   </button>
-                  <p className="text-center text-[10px] text-slate-400 font-medium mt-4">
-                    Your listing will be reviewed by an admin before it goes live.
-                  </p>
                 </div>
               </form>
             </motion.div>
@@ -4911,7 +5306,8 @@ export default function App() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-[100] bg-slate-900/95 backdrop-blur-2xl flex flex-col"
+            className="fixed inset-0 z-[100] bg-slate-900/95 backdrop-blur-2xl flex flex-col select-none"
+            onContextMenu={(e) => e.preventDefault()}
           >
             {/* Minimal Header */}
             <div className="h-20 flex items-center justify-between px-6 sm:px-10 shrink-0">
@@ -4926,15 +5322,13 @@ export default function App() {
               </div>
               
               <div className="flex items-center gap-4">
-                <a 
-                  href={readingDoc.url} 
-                  target="_blank" 
-                  rel="noopener noreferrer"
+                <button 
+                  onClick={() => handleDownloadDoc(readingDoc)}
                   className="hidden md:flex items-center gap-2 px-5 py-2.5 bg-white/10 hover:bg-white/20 text-white rounded-xl text-xs font-bold transition-all border border-white/10"
                 >
-                  <ExternalLink size={16} />
-                  Open Native
-                </a>
+                  <Download size={16} />
+                  Download
+                </button>
                 <button 
                   onClick={() => setReadingDoc(null)}
                   className="w-12 h-12 flex items-center justify-center bg-red-500/10 hover:bg-red-500 text-red-500 hover:text-white rounded-2xl transition-all border border-red-500/20"
@@ -5104,146 +5498,164 @@ export default function App() {
       {/* Lost & Found Modal */}
       <AnimatePresence>
         {isLostFoundModalOpen && (
-          <div className="fixed inset-0 z-[60] flex items-end sm:items-center justify-center p-4">
+          <div className="fixed inset-x-0 top-20 bottom-32 z-30 flex items-center justify-center p-4 sm:p-8">
             <motion.div 
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               onClick={() => setIsLostFoundModalOpen(false)}
-              className="absolute inset-0 bg-dark-surface/60 backdrop-blur-md"
+              className="fixed inset-0 bg-dark-surface/40 backdrop-blur-sm -z-10"
             />
             <motion.div 
-              initial={{ y: "100%" }}
-              animate={{ y: 0 }}
-              exit={{ y: "100%" }}
-              className="relative w-full max-w-lg bg-white rounded-t-[3rem] sm:rounded-[3rem] p-6 sm:p-10 shadow-2xl overflow-y-auto max-h-[90vh]"
+              initial={{ y: 20, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 20, opacity: 0 }}
+              className="relative w-full max-w-4xl h-full bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl rounded-[2.5rem] p-6 sm:p-10 shadow-2xl border border-white/20 dark:border-white/5 overflow-hidden flex flex-col"
             >
               <div className="flex items-center justify-between mb-8">
-                <h2 className="text-2xl sm:text-3xl font-display font-bold text-dark-surface">
+                <h2 className="text-2xl sm:text-3xl font-display font-bold text-dark-surface dark:text-white">
                   {editingLostFound ? 'Edit Item' : 'Post Item'}
                 </h2>
-                <button onClick={() => setIsLostFoundModalOpen(false)} className="p-3 hover:bg-slate-100 rounded-2xl transition-colors">
+                <button onClick={() => setIsLostFoundModalOpen(false)} className="p-3 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-2xl transition-colors text-slate-400">
                   <X size={24} />
                 </button>
               </div>
 
-              <form onSubmit={handleAddLostFound} className="space-y-6">
-                <div className="grid grid-cols-2 gap-4 p-1 bg-slate-100 rounded-2xl">
-                  <button
-                    type="button"
-                    onClick={() => setLostFoundFormData({...lostFoundFormData, type: 'lost'})}
-                    className={cn(
-                      "py-3 rounded-xl font-bold text-sm transition-all",
-                      lostFoundFormData.type === 'lost' ? "bg-white text-red-600 shadow-sm" : "text-slate-500"
-                    )}
-                  >
-                    Lost
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setLostFoundFormData({...lostFoundFormData, type: 'found'})}
-                    className={cn(
-                      "py-3 rounded-xl font-bold text-sm transition-all",
-                      lostFoundFormData.type === 'found' ? "bg-white text-emerald-600 shadow-sm" : "text-slate-500"
-                    )}
-                  >
-                    Found
-                  </button>
-                </div>
+              <form onSubmit={handleAddLostFound} className="space-y-6 flex-1 overflow-y-auto px-1 pb-20 sm:pb-0">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                  <div className="space-y-6">
+                    <div className="grid grid-cols-2 gap-4 p-1 bg-slate-100 dark:bg-slate-800 rounded-2xl">
+                      <button
+                        type="button"
+                        onClick={() => setLostFoundFormData({...lostFoundFormData, type: 'lost'})}
+                        className={cn(
+                          "py-3 rounded-xl font-bold text-sm transition-all",
+                          lostFoundFormData.type === 'lost' ? "bg-white dark:bg-slate-700 text-red-600 dark:text-red-400 shadow-sm" : "text-slate-500 dark:text-slate-400"
+                        )}
+                      >
+                        Lost
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setLostFoundFormData({...lostFoundFormData, type: 'found'})}
+                        className={cn(
+                          "py-3 rounded-xl font-bold text-sm transition-all",
+                          lostFoundFormData.type === 'found' ? "bg-white dark:bg-slate-700 text-emerald-600 dark:text-emerald-400 shadow-sm" : "text-slate-500 dark:text-slate-400"
+                        )}
+                      >
+                        Found
+                      </button>
+                    </div>
 
-                <div className="space-y-3">
-                  <label className="text-sm font-bold text-slate-500 uppercase tracking-widest ml-1">Title</label>
-                  <input 
-                    required
-                    type="text"
-                    value={lostFoundFormData.title}
-                    onChange={e => setLostFoundFormData({...lostFoundFormData, title: e.target.value})}
-                    placeholder="Black Wallet, Keys, etc."
-                    className="w-full px-6 py-4 bg-slate-50 border-none rounded-2xl focus:ring-4 focus:ring-dark-surface/5 transition-all"
-                  />
-                </div>
+                    <div className="space-y-3">
+                      <label className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest ml-1">Title</label>
+                      <input 
+                        required
+                        type="text"
+                        value={lostFoundFormData.title}
+                        onChange={e => setLostFoundFormData({...lostFoundFormData, title: e.target.value})}
+                        placeholder="Black Wallet, Keys, etc."
+                        className="w-full px-6 py-4 bg-slate-50 dark:bg-slate-800 border-none rounded-2xl focus:ring-4 focus:ring-dark-surface/5 transition-all dark:text-white dark:placeholder-slate-600"
+                      />
+                    </div>
 
-                <div className="space-y-3">
-                  <label className="text-sm font-bold text-slate-500 uppercase tracking-widest ml-1">Description</label>
-                  <textarea 
-                    required
-                    value={lostFoundFormData.description}
-                    onChange={e => setLostFoundFormData({...lostFoundFormData, description: e.target.value})}
-                    placeholder="Provide details about the item..."
-                    className="w-full px-6 py-4 bg-slate-50 border-none rounded-2xl focus:ring-4 focus:ring-dark-surface/5 transition-all min-h-[100px]"
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-6">
-                  <div className="space-y-3">
-                    <label className="text-sm font-bold text-slate-500 uppercase tracking-widest ml-1">Location</label>
-                    <input 
-                      required
-                      type="text"
-                      value={lostFoundFormData.location}
-                      onChange={e => setLostFoundFormData({...lostFoundFormData, location: e.target.value})}
-                      placeholder="Library, Cafeteria..."
-                      className="w-full px-6 py-4 bg-slate-50 border-none rounded-2xl focus:ring-4 focus:ring-dark-surface/5 transition-all"
-                    />
+                    <div className="grid grid-cols-2 gap-6">
+                      <div className="space-y-3">
+                        <label className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest ml-1">Location</label>
+                        <input 
+                          required
+                          type="text"
+                          value={lostFoundFormData.location}
+                          onChange={e => setLostFoundFormData({...lostFoundFormData, location: e.target.value})}
+                          placeholder="Library, Cafeteria..."
+                          className="w-full px-6 py-4 bg-slate-50 dark:bg-slate-800 border-none rounded-2xl focus:ring-4 focus:ring-dark-surface/5 transition-all dark:text-white dark:placeholder-slate-600"
+                        />
+                      </div>
+                      <div className="space-y-3">
+                        <label className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest ml-1">Date</label>
+                        <input 
+                          required
+                          type="date"
+                          value={lostFoundFormData.date}
+                          onChange={e => setLostFoundFormData({...lostFoundFormData, date: e.target.value})}
+                          className="w-full px-6 py-4 bg-slate-50 dark:bg-slate-800 border-none rounded-2xl focus:ring-4 focus:ring-dark-surface/5 transition-all dark:text-white"
+                        />
+                      </div>
+                    </div>
                   </div>
-                  <div className="space-y-3">
-                    <label className="text-sm font-bold text-slate-500 uppercase tracking-widest ml-1">Date</label>
-                    <input 
-                      required
-                      type="date"
-                      value={lostFoundFormData.date}
-                      onChange={e => setLostFoundFormData({...lostFoundFormData, date: e.target.value})}
-                      className="w-full px-6 py-4 bg-slate-50 border-none rounded-2xl focus:ring-4 focus:ring-dark-surface/5 transition-all"
-                    />
-                  </div>
-                </div>
 
-                <div className="space-y-3">
-                  <label className="text-sm font-bold text-slate-500 uppercase tracking-widest ml-1">Item Image</label>
-                  <div className="relative group">
-                    <input 
-                      type="file"
-                      accept="image/*"
-                      onChange={e => setSelectedImage(e.target.files?.[0] || null)}
-                      className="hidden"
-                      id="lost-found-image"
-                    />
-                    <label 
-                      htmlFor="lost-found-image"
-                      className="w-full px-6 py-8 bg-slate-50 border-2 border-dashed border-slate-200 rounded-2xl flex flex-col items-center justify-center gap-3 cursor-pointer hover:bg-slate-100 hover:border-brand-300 transition-all group"
-                    >
-                      {selectedImage ? (
-                        <div className="flex flex-col items-center gap-2">
-                          <CheckCircle className="text-emerald-500" size={32} />
-                          <span className="text-sm font-bold text-emerald-600">{selectedImage.name}</span>
-                        </div>
-                      ) : (
-                        <>
-                          <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center text-slate-400 group-hover:text-brand-500 transition-colors">
-                            <ImageIcon size={24} />
+                  <div className="space-y-6">
+                    <div className="space-y-3">
+                      <label className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest ml-1">Description</label>
+                      <textarea 
+                        required
+                        value={lostFoundFormData.description}
+                        onChange={e => setLostFoundFormData({...lostFoundFormData, description: e.target.value})}
+                        placeholder="Provide details about the item..."
+                        className="w-full px-6 py-4 bg-slate-50 dark:bg-slate-800 border-none rounded-2xl focus:ring-4 focus:ring-dark-surface/5 transition-all min-h-[120px] dark:text-white dark:placeholder-slate-600"
+                      />
+                    </div>
+
+                    <div className="space-y-3">
+                      <label className="text-sm font-bold text-slate-500 dark:text-slate-400 uppercase tracking-widest ml-1">Item Images</label>
+                      <div className="grid grid-cols-2 gap-4">
+                        <label className="aspect-square bg-slate-50 dark:bg-slate-800 border-2 border-dashed border-slate-200 dark:border-slate-700 rounded-2xl flex flex-col items-center justify-center gap-2 cursor-pointer hover:bg-slate-100 dark:hover:bg-slate-700 hover:border-brand-300 transition-all group">
+                          <ImageIcon size={24} className="text-slate-400 group-hover:text-brand-500 transition-colors" />
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Add Image</span>
+                          <input 
+                            type="file"
+                            accept="image/*"
+                            multiple
+                            onChange={e => {
+                              const files = Array.from(e.target.files || []);
+                              setSelectedLostFoundImages(prev => [...prev, ...files].slice(0, 2));
+                            }}
+                            className="hidden"
+                          />
+                        </label>
+                        {selectedLostFoundImages.map((file, i) => (
+                          <div key={i} className="aspect-square bg-slate-100 dark:bg-slate-800 rounded-2xl overflow-hidden relative group">
+                            <img 
+                              src={URL.createObjectURL(file)} 
+                              alt="Preview" 
+                              className="w-full h-full object-cover" 
+                            />
+                            <button 
+                              type="button"
+                              onClick={() => setSelectedLostFoundImages(selectedLostFoundImages.filter((_, idx) => idx !== i))}
+                              className="absolute top-1 right-1 p-1.5 bg-red-500 text-white rounded-full shadow-lg opacity-0 group-hover:opacity-100 transition-opacity"
+                            >
+                              <X size={14} />
+                            </button>
                           </div>
-                          <div className="text-center">
-                            <p className="text-sm font-bold text-slate-600">Click to upload image</p>
-                            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mt-1">PNG, JPG up to 5MB</p>
-                          </div>
-                        </>
-                      )}
-                    </label>
+                        ))}
+                      </div>
+                      <p className="text-[10px] text-slate-400 dark:text-slate-500 font-medium italic">Max 2 images.</p>
+                    </div>
                   </div>
                 </div>
 
-                <button 
-                  type="submit"
-                  disabled={isUploading}
-                  className="w-full py-5 bg-dark-surface hover:bg-black text-white rounded-[2rem] font-bold transition-all shadow-xl flex items-center justify-center gap-3 text-lg disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  {isUploading ? (
-                    <CoolLoader size={32} />
-                  ) : (
-                    editingLostFound ? <Edit3 size={24} /> : <Plus size={24} />
-                  )}
-                  {isUploading ? 'Uploading...' : (editingLostFound ? 'Update' : 'Post Item')}
-                </button>
+                <div className="flex gap-4 pt-4">
+                  <button 
+                    type="button"
+                    onClick={() => setIsLostFoundModalOpen(false)}
+                    className="flex-1 px-8 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-bold rounded-2xl hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
+                  >
+                    Cancel
+                  </button>
+                  <button 
+                    type="submit"
+                    disabled={isUploading}
+                    className="flex-[2] px-8 py-4 bg-dark-surface dark:bg-indigo-600 hover:bg-black dark:hover:bg-indigo-700 text-white rounded-[2rem] font-bold transition-all shadow-xl flex items-center justify-center gap-3 text-lg disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isUploading ? (
+                      <CoolLoader size={32} />
+                    ) : (
+                      editingLostFound ? <Edit3 size={24} /> : <Plus size={24} />
+                    )}
+                    <span>{isUploading ? 'Uploading...' : (editingLostFound ? 'Update' : 'Post Item')}</span>
+                  </button>
+                </div>
                 {!isAdmin && (
                   <p className="text-center text-xs text-slate-400 font-medium">
                     Your post will be live after admin approval.
@@ -5257,9 +5669,9 @@ export default function App() {
 
       {/* Fullscreen Image Modal */}
       <AnimatePresence>
-        {fullscreenImage && (
+        {fullscreenImages && (
           <div 
-            onClick={() => setFullscreenImage(null)}
+            onClick={() => setFullscreenImages(null)}
             className="fixed inset-0 z-[100] flex items-center justify-center bg-black/95 backdrop-blur-2xl p-4 sm:p-10 cursor-zoom-out"
           >
             <motion.div 
@@ -5267,20 +5679,61 @@ export default function App() {
               animate={{ opacity: 1, scale: 1 }}
               exit={{ opacity: 0, scale: 0.9 }}
               onClick={(e) => e.stopPropagation()}
-              className="relative w-full h-full flex items-center justify-center"
+              className="relative w-full h-full flex items-center justify-center group"
             >
               <button 
-                onClick={() => setFullscreenImage(null)}
+                onClick={() => setFullscreenImages(null)}
                 className="absolute top-0 right-0 p-4 text-white/50 hover:text-white transition-colors z-10"
               >
                 <X size={40} />
               </button>
-              <img 
-                src={fullscreenImage} 
-                alt="Fullscreen Preview"
-                className="max-w-full max-h-full object-contain shadow-2xl rounded-lg"
-                referrerPolicy="no-referrer"
-              />
+
+              <div className="w-full h-full flex transition-transform duration-500 ease-out" style={{ transform: `translateX(-${fullscreenIndex * 100}%)` }}>
+                {fullscreenImages.map((url, idx) => (
+                  <div key={idx} className="w-full h-full shrink-0 flex items-center justify-center">
+                    <img 
+                      src={url} 
+                      alt={`Fullscreen Preview ${idx + 1}`}
+                      className="max-w-full max-h-full object-contain shadow-2xl rounded-lg"
+                      referrerPolicy="no-referrer"
+                    />
+                  </div>
+                ))}
+              </div>
+
+              {fullscreenImages.length > 1 && (
+                <>
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setFullscreenIndex(prev => prev === 0 ? fullscreenImages.length - 1 : prev - 1);
+                    }}
+                    className="absolute left-4 top-1/2 -translate-y-1/2 p-4 bg-white/10 hover:bg-white/20 backdrop-blur-md rounded-full text-white transition-all opacity-0 group-hover:opacity-100"
+                  >
+                    <ChevronLeft size={32} />
+                  </button>
+                  <button 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setFullscreenIndex(prev => prev === fullscreenImages.length - 1 ? 0 : prev + 1);
+                    }}
+                    className="absolute right-4 top-1/2 -translate-y-1/2 p-4 bg-white/10 hover:bg-white/20 backdrop-blur-md rounded-full text-white transition-all opacity-0 group-hover:opacity-100"
+                  >
+                    <ChevronRight size={32} />
+                  </button>
+                  <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex gap-3">
+                    {fullscreenImages.map((_, idx) => (
+                      <div 
+                        key={idx}
+                        className={cn(
+                          "w-3 h-3 rounded-full transition-all",
+                          fullscreenIndex === idx ? "bg-white w-8" : "bg-white/30"
+                        )}
+                      />
+                    ))}
+                  </div>
+                </>
+              )}
             </motion.div>
           </div>
         )}
@@ -5299,6 +5752,88 @@ export default function App() {
           </motion.button>
         )}
       </AnimatePresence>
+      {/* Edit Profile Modal */}
+      <AnimatePresence>
+        {isEditingProfile && (
+          <div className="fixed inset-x-0 top-20 bottom-32 z-30 flex items-center justify-center p-4">
+            <motion.div 
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={() => setIsEditingProfile(false)}
+              className="fixed inset-0 bg-dark-surface/40 backdrop-blur-sm -z-10"
+            />
+            <motion.div 
+              initial={{ opacity: 0, scale: 0.95, y: 10 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.95, y: 10 }}
+              className="relative w-full max-w-md bg-white/90 dark:bg-slate-900/90 backdrop-blur-xl rounded-[2.5rem] shadow-2xl border border-white/20 dark:border-white/5 overflow-hidden"
+            >
+              <div className="p-8 space-y-6">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-2xl font-display font-bold text-dark-surface dark:text-white">Edit Profile</h3>
+                  <button 
+                    onClick={() => setIsEditingProfile(false)}
+                    className="p-2 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-xl transition-colors"
+                  >
+                    <X size={20} />
+                  </button>
+                </div>
+
+                <form onSubmit={handleProfileUpdate} className="space-y-6">
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Display Name</label>
+                      <div className="relative">
+                        <UserIcon className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+                        <input 
+                          type="text"
+                          required
+                          value={profileFormData.displayName}
+                          onChange={(e) => setProfileFormData(prev => ({ ...prev, displayName: e.target.value }))}
+                          className="w-full pl-12 pr-4 py-4 bg-slate-50 dark:bg-slate-800 border-none rounded-2xl font-bold focus:ring-2 focus:ring-brand-500 transition-all dark:text-white"
+                          placeholder="Your full name"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Phone Number</label>
+                      <div className="relative">
+                        <Phone className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" size={20} />
+                        <input 
+                          type="tel"
+                          value={profileFormData.phoneNumber}
+                          onChange={(e) => setProfileFormData(prev => ({ ...prev, phoneNumber: e.target.value }))}
+                          className="w-full pl-12 pr-4 py-4 bg-slate-50 dark:bg-slate-800 border-none rounded-2xl font-bold focus:ring-2 focus:ring-brand-500 transition-all dark:text-white"
+                          placeholder="Your phone number"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-3 pt-2">
+                    <button 
+                      type="button"
+                      onClick={() => setIsEditingProfile(false)}
+                      className="flex-1 py-4 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-2xl font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-all"
+                    >
+                      Cancel
+                    </button>
+                    <button 
+                      type="submit"
+                      className="flex-1 py-4 bg-brand-600 text-white rounded-2xl font-bold hover:bg-brand-700 transition-all shadow-lg shadow-brand-200"
+                    >
+                      Save Changes
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
       <ConfirmationModal 
         isOpen={confirmModal.isOpen}
         onClose={() => setConfirmModal(prev => ({ ...prev, isOpen: false }))}
@@ -5309,6 +5844,8 @@ export default function App() {
       />
     </>
   )}
-</div>
+        </motion.div>
+      )}
+    </div>
   );
 }
